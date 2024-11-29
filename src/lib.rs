@@ -4,20 +4,18 @@ use std::{iter::FusedIterator, sync::Mutex};
 use windows::Win32::{
     Foundation::HANDLE,
     System::Console::{
-        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, ReadConsoleInputW,
-        SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, COORD, INPUT_RECORD,
-        KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, ReadConsoleInputW, SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, COORD, INPUT_RECORD, KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE
     },
 };
 
 mod commands;
 mod loadbar;
 
+mod color;
 mod macros;
 mod page;
-mod color;
 
-pub use crate::color::{ColorUtils, Color, Attributes};
+pub use crate::color::{Attributes, Color, ColorUtils};
 
 pub use crate::page::{Content, Page, PageUtils};
 
@@ -54,6 +52,7 @@ impl Terminal {
             }
             match get_console_handle() {
                 Ok(handle) => {
+                    #[cfg(not(feature = "debug"))]
                     let attr = {
                         let mut info = std::mem::zeroed();
                         if GetConsoleScreenBufferInfo(handle.1, core::ptr::addr_of_mut!(info))
@@ -62,6 +61,11 @@ impl Terminal {
                             return Err(());
                         }
                         Attributes::from(info.wAttributes)
+                    };
+                    #[cfg(feature = "debug")]
+                    let attr = {
+                        use windows::Win32::System::Console::CONSOLE_CHARACTER_ATTRIBUTES;
+                        Attributes::from(CONSOLE_CHARACTER_ATTRIBUTES(0))
                     };
                     TERMINAL = Some(Mutex::new(TerminalStat {
                         input: handle.0,
@@ -99,7 +103,6 @@ impl Terminal {
                 return Err(());
             };
             Ok(())
-            //let size = self.get_size()?;let len = size.0 as u32 * size.1 as u32;let handle = get_handle_output!();let mut chars_written = 0;if FillConsoleOutputCharacterW(handle,' ' as u16,len,COORD { X: 0, Y: 0 },&mut chars_written,).is_err() {return Err(());}Ok(())
         }
     }
 }
@@ -121,8 +124,8 @@ impl Terminal {
 
             let mut coninfo: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
             if GetConsoleScreenBufferInfo(handle, &mut coninfo).is_ok() {
-                let size: COORD = coninfo.dwSize;
-                let (x, y) = (size.X, size.Y);
+                let size = coninfo.srWindow;
+                let (x, y) = (size.Right-size.Left, size.Bottom-size.Top);
                 return Ok((x as usize, y as usize));
             } else {
                 return Err(());
@@ -146,30 +149,32 @@ impl Terminal {
 
 const IKEY_EVENT: u16 = KEY_EVENT as u16;
 
-pub fn get_key() -> Option<Key> {
-    unsafe {
-        let handle = get_handle_input!(noerr);
-        let mut events: u32 = 0;
-        //Gets the amount of Input Events
-        if GetNumberOfConsoleInputEvents(handle, core::ptr::addr_of_mut!(events)).is_err() {
-            return None;
-        };
-        if events > 0 {
-            let mut buffer: [INPUT_RECORD; 1] = std::mem::zeroed();
-            let mut read: u32 = 0;
-            if ReadConsoleInputW(handle, &mut buffer, core::ptr::addr_of_mut!(read)).is_err() {
+impl Terminal {
+    pub fn get_key(&self) -> Option<(Key, char)> {
+        unsafe {
+            let handle = get_handle_input!(noerr);
+            let mut events: u32 = 0;
+            //Gets the amount of Input Events
+            if GetNumberOfConsoleInputEvents(handle, core::ptr::addr_of_mut!(events)).is_err() {
                 return None;
-            }
-            match buffer[0].EventType {
-                IKEY_EVENT => {
-                    if buffer[0].Event.KeyEvent.bKeyDown.as_bool() {
-                        return Some(buffer[0].Event.KeyEvent.wVirtualKeyCode);
-                    }
+            };
+            if events > 0 {
+                let mut buffer: [INPUT_RECORD; 1] = std::mem::zeroed();
+                let mut read: u32 = 0;
+                if ReadConsoleInputW(handle, &mut buffer, core::ptr::addr_of_mut!(read)).is_err() {
+                    return None;
                 }
-                _ => return None,
+                match buffer[0].EventType {
+                    IKEY_EVENT => {
+                        if buffer[0].Event.KeyEvent.bKeyDown.as_bool() {
+                            return Some((buffer[0].Event.KeyEvent.wVirtualKeyCode, char::from_u32(buffer[0].Event.KeyEvent.uChar.UnicodeChar.into()).or(Some(' ')).unwrap()));
+                        }
+                    }
+                    _ => return None,
+                }
             }
+            return None;
         }
-        return None;
     }
 }
 
@@ -185,7 +190,6 @@ fn test() {
             .as_secs()
             > 20
         {
-            println!("x");
             std::process::exit(0x0)
         }
     });
@@ -258,11 +262,6 @@ fn test() {
 
     assert!(Commands::from_string("".to_string()).is_err());
     log(fiv_log::INFO, "10");
-
-    println!(
-        "{:?}",
-        std::time::SystemTime::duration_since(&std::time::SystemTime::now(), t).unwrap()
-    )
 }
 
 //https://learn.microsoft.com/de-de/windows/win32/inputdev/virtual-key-codes
