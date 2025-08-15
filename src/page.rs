@@ -10,17 +10,17 @@ pub enum Content {
     //The Page itself
     InfoPage(String),
     //An Info Page with a Confirm Function
-    ConfirmPage((String, fn()->Page)),
+    ConfirmPage((String, fn() -> Page)),
     //The possible Sites
     SubMenü(Vec<Page>),
     //The Question; The possible Answers; The Answer Processing
-    SelectList((String, Vec<String>, fn(&str)->Page)),
+    SelectList((String, Vec<String>, fn(&str) -> Page)),
     //The Currrent Search; The Question; The possible Answers; The Answer Processing
-    SearchSelectList((String, String, Vec<usize>, fn(&str)->Page, Vec<String>)),
+    SearchSelectList((String, String, Vec<usize>, fn(&str) -> Page, Vec<String>)),
     //The Question; Entered Text
-    TextInput((String, String, fn(&mut String)->Page)),
+    TextInput((String, String, fn(&mut String) -> Page)),
     //KeyInp TerSize VisOut Page Ok
-    CustomPageRender(fn((u16, char),(usize, usize))->(Option<String>, Option<Page>))
+    CustomPageRender(fn((u16, char), (usize, usize)) -> (Option<String>, Option<Page>)),
 }
 #[derive(Clone)]
 /// This is an Page Renderer
@@ -30,14 +30,14 @@ pub enum Content {
 ///  -> Selection Pages(SelectList)
 ///  -> Custom Rendered Pages with Key Inputs
 ///  -> Sub Menü Pages
-/// 
+///
 /// Possible a enum with Display Trait?
 /// Additionally are Page update functions avalible
 pub struct Page {
     //UFT-16 Title
     title: String,
     //Updates the Page
-    update: Option<fn(menü: &mut Content)->bool>,
+    update: Option<fn(menü: &mut Content) -> bool>,
     //Content
     content: Content,
 }
@@ -56,70 +56,69 @@ impl PageUtils for Terminal {
         //Terminal Handles does not have high enough rights in a debugger
 
         #[cfg(feature = "debug")]
-        let size = (75,20);
+        let size = (75, 20);
 
         self.blank()?;
 
         Page::print_page(self, &page.title, &page.content, line)?;
-        
+
         loop {
-            
             sleep(Duration::from_millis(10));
-            
+
             match self.get_key() {
                 Some(x) => match x.0 {
                     //At every Page Type
                     0x25 => {
                         match &mut page.content {
-                            Content::SearchSelectList(inner)=>{
+                            Content::SearchSelectList(inner) => {
                                 inner.0.clear();
                                 inner.2.clear();
                                 for i in 0..inner.4.len() {
                                     inner.2.push(i);
                                 }
                             }
-                            _=>()
+                            _ => (),
                         }
-                        return Ok(())
-                    },
+                        return Ok(());
+                    }
                     0x27 => {
                         match &mut page.content {
                             Content::SubMenü(sm) => {
                                 if sm.is_empty() {
                                     ()
-                                }else {
+                                } else {
                                     self.open(&mut sm[line])?;
                                 }
-                            },
-                            Content::SelectList((_, vec, func)) =>{
+                            }
+                            Content::SelectList((_, vec, func)) => {
                                 if vec.is_empty() {
                                     ()
-                                }else {
+                                } else {
                                     self.open(&mut func(&vec[line]))?;
                                 }
-                            },
+                            }
                             Content::SearchSelectList((_, _, vec, func, x)) => {
                                 if vec.is_empty() {
                                     ()
-                                }else {
+                                } else {
                                     self.open(&mut func(&x[vec[line]]))?;
                                 }
-                            },
-                            Content::TextInput((_, input, func))=> {
+                            }
+                            Content::TextInput((_, input, func)) => {
                                 self.open(&mut func(input))?;
                             }
-                            Content::CustomPageRender(func)=> {
-                                match func(x, (size.0, size.1-4)).1 {
-                                    Some(mut page)=> {
+                            Content::CustomPageRender(func) => {
+                                match func(x, (size.0, size.1 - 4)).1 {
+                                    Some(mut page) => {
                                         self.open(&mut page)?;
-                                    },
-                                    None=>()
+                                    }
+                                    None => (),
                                 }
                             }
-                            Content::ConfirmPage((_, func))=>{
+                            Content::ConfirmPage((_, func)) => {
                                 self.open(&mut func())?;
                             }
-                            Content::InfoPage(_)=> (),
+                            Content::InfoPage(_) => (),
                         }
                         Page::print_page(self, &page.title, &page.content, line)?;
                     }
@@ -136,79 +135,82 @@ impl PageUtils for Terminal {
                         }
                     }
                     //Only Custom Keybinds
-                    _ =>{
-                        match &mut page.content {
-                            Content::TextInput(inner)=>{
-                                match x.0 {
-                                    0x08=>{
-                                        inner.1.pop();
-                                    }
-                                    0x0D=>(),
-                                    _=>{
-                                        let char = x.1;
-                                        inner.1.push(char)
-                                    }
-                                };
-                                Page::print_page(self, &page.title, &page.content, line)?;
-                            },
-                            Content::CustomPageRender(func)=>{
-                                match func(x, (size.0, size.1-4)).0 {
-                                    Some(mut view)=>{
-                                        if view.lenlines(size.0).count() > size.1-4 {
-                                            view.truncate(size.0*size.1-4);
-                                        }
-                                        view.shrink_to_fit();
-                                        unsafe{
-                                            self.set_pos(0, 2)?;
-                                            let handle = get_handle_output!();
-                                            if WriteConsoleW(handle, &view.encode_utf16().collect::<Vec<u16>>(), None, None).is_err() {
-                                                return Err(());
-                                            };
-                                        }
-                                    },
-                                    None=>()
+                    _ => match &mut page.content {
+                        Content::TextInput(inner) => {
+                            match x.0 {
+                                0x08 => {
+                                    inner.1.pop();
                                 }
-                            },
-                            Content::SearchSelectList(inner)=>{
-                                match x.0 {
-                                    0x08=>{
-                                        inner.0.pop();
-                                        
-                                        inner.2.clear();
-                                        line=0;
-
-                                        let mut i = 0;
-
-                                        for elem in inner.4.iter() {
-                                            if elem.to_lowercase().contains(&inner.0.to_lowercase()) {
-                                                inner.2.push(i);
-                                            }
-                                            i+=1;
-                                        }
-                                        Page::print_page(self, &page.title, &page.content, line)?
-                                    },
-                                    0x0D=>(),
-                                    _=>{
-                                        let char = x.1;
-                                        inner.0.push(char);
-
-                                        inner.2.clear();
-                                        line=0;
-
-                                        let mut i = 0;
-
-                                        for elem in inner.4.iter() {
-                                            if elem.to_lowercase().contains(&inner.0.to_lowercase()) {
-                                                inner.2.push(i);
-                                            }
-                                            i+=1;
-                                        }
-                                        Page::print_page(self, &page.title, &page.content, line)?
-                                    }
-                                };
-                            }
-                            _=>()
+                                0x0D => (),
+                                _ => {
+                                    let char = x.1;
+                                    inner.1.push(char)
+                                }
+                            };
+                            Page::print_page(self, &page.title, &page.content, line)?;
                         }
+                        Content::CustomPageRender(func) => match func(x, (size.0, size.1 - 4)).0 {
+                            Some(mut view) => {
+                                if view.lenlines(size.0).count() > size.1 - 4 {
+                                    view.truncate(size.0 * size.1 - 4);
+                                }
+                                view.shrink_to_fit();
+                                unsafe {
+                                    self.set_pos(0, 2)?;
+                                    let handle = get_handle_output!();
+                                    if WriteConsoleW(
+                                        handle,
+                                        &view.encode_utf16().collect::<Vec<u16>>(),
+                                        None,
+                                        None,
+                                    )
+                                    .is_err()
+                                    {
+                                        return Err(());
+                                    };
+                                }
+                            }
+                            None => (),
+                        },
+                        Content::SearchSelectList(inner) => {
+                            match x.0 {
+                                0x08 => {
+                                    inner.0.pop();
+
+                                    inner.2.clear();
+                                    line = 0;
+
+                                    let mut i = 0;
+
+                                    for elem in inner.4.iter() {
+                                        if elem.to_lowercase().contains(&inner.0.to_lowercase()) {
+                                            inner.2.push(i);
+                                        }
+                                        i += 1;
+                                    }
+                                    Page::print_page(self, &page.title, &page.content, line)?
+                                }
+                                0x0D => (),
+                                _ => {
+                                    let char = x.1;
+                                    inner.0.push(char);
+
+                                    inner.2.clear();
+                                    line = 0;
+
+                                    let mut i = 0;
+
+                                    for elem in inner.4.iter() {
+                                        if elem.to_lowercase().contains(&inner.0.to_lowercase()) {
+                                            inner.2.push(i);
+                                        }
+                                        i += 1;
+                                    }
+                                    Page::print_page(self, &page.title, &page.content, line)?
+                                }
+                            };
+                        }
+                        _ => (),
                     },
                 },
                 None => (),
@@ -218,7 +220,7 @@ impl PageUtils for Terminal {
                     if func(&mut page.content) {
                         Page::print_page(self, &page.title, &page.content, line)?;
                     }
-                },
+                }
                 None => (),
             }
         }
@@ -228,12 +230,14 @@ impl PageUtils for Terminal {
 impl Content {
     fn len(&self, terlen: usize) -> usize {
         match self {
-            Content::InfoPage(inner) | Content::ConfirmPage((inner, _)) => inner.lenlines(terlen).count(),
+            Content::InfoPage(inner) | Content::ConfirmPage((inner, _)) => {
+                inner.lenlines(terlen).count()
+            }
             Content::SubMenü(inner) => inner.len(),
-            Content::TextInput(_)=> 1,
+            Content::TextInput(_) => 1,
             Content::SelectList((_, v, _)) => v.len(),
-            Content::SearchSelectList((_, _, v, _, _))=> v.len(),
-            Content::CustomPageRender(_)=>0
+            Content::SearchSelectList((_, _, v, _, _)) => v.len(),
+            Content::CustomPageRender(_) => 0,
         }
     }
 }
@@ -256,22 +260,22 @@ impl Page {
         x.content = Content::SubMenü(v);
         x
     }
-    pub fn select<A: ToString>(self, desc: A, vec: &[A], func: fn(&str)->Page) -> Page {
+    pub fn select<A: ToString>(self, desc: A, vec: &[A], func: fn(&str) -> Page) -> Page {
         let mut x = self;
-        let v = vec.iter().map(|s|s.to_string()).collect::<Vec<String>>();
+        let v = vec.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         for i in v.iter() {
-            if i.len() >= MIN_WIDTH-1 {
+            if i.len() >= MIN_WIDTH - 1 {
                 panic!("OPtion too large-Later adding of scrolling")
             }
         }
         x.content = Content::SelectList((desc.to_string(), v, func));
         x
     }
-    pub fn selectnsearch<A: ToString>(self, desc: A, vec: &[A], func: fn(&str)->Page) -> Page {
+    pub fn selectnsearch<A: ToString>(self, desc: A, vec: &[A], func: fn(&str) -> Page) -> Page {
         let mut x = self;
-        let v = vec.iter().map(|s|s.to_string()).collect::<Vec<String>>();
+        let v = vec.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         for i in v.iter() {
-            if i.len() >= MIN_WIDTH-1 {
+            if i.len() >= MIN_WIDTH - 1 {
                 panic!("OPtion too large-Later adding of scrolling")
             }
         }
@@ -292,7 +296,7 @@ impl Page {
         x.title = str.to_string();
         x
     }
-    pub fn update(self, func: fn(&mut Content)->bool) -> Page {
+    pub fn update(self, func: fn(&mut Content) -> bool) -> Page {
         let mut x = self;
         x.update = Some(func);
         x
@@ -300,14 +304,17 @@ impl Page {
     ///It is very important to apply the following rules to the func for thr Page Gen
     /// -> If the u16 is 0 the function must generate the current Page and return Some()
     /// -> If the u16 or the char does not match any Key Binding you should not generate the Page again and return None
-    pub fn custom(self, func: fn((u16, char),(usize,usize))->(Option<String>, Option<Page>))->Page {
+    pub fn custom(
+        self,
+        func: fn((u16, char), (usize, usize)) -> (Option<String>, Option<Page>),
+    ) -> Page {
         let mut x = self;
         x.content = Content::CustomPageRender(func);
         x
     }
     ///The Confirm Page calls if the user confirms the function.
-    /// You can add custom logic to your function. 
-    pub fn confirm<A: ToString>(self, str: A, func: fn()->Page)->Page {
+    /// You can add custom logic to your function.
+    pub fn confirm<A: ToString>(self, str: A, func: fn() -> Page) -> Page {
         let mut x = self;
         x.content = Content::ConfirmPage((str.to_string(), func));
         x
@@ -322,8 +329,6 @@ impl Page {
         if size.0 < MIN_WIDTH && size.1 < MIN_HEIGHT {
             return Err(());
         }
-
-        
 
         unsafe {
             let handle = get_handle_output!();
@@ -367,13 +372,13 @@ impl Page {
                     }
                     str
                 }
-                Content::SelectList(inner)=> {
+                Content::SelectList(inner) => {
                     let mut str = inner.0.clone();
                     str.push_str(":\n>");
                     if inner.1.is_empty() {
                         str.push_str("Nothing in here");
                         str.push_str("<\n");
-                    }else{
+                    } else {
                         str.push_str(&inner.1[pline]);
                         str.push_str("<\n");
                         let len = inner.1.len();
@@ -386,12 +391,12 @@ impl Page {
                     }
                     str
                 }
-                Content::SearchSelectList(inner)=>{
+                Content::SearchSelectList(inner) => {
                     let mut str = format!("{}:\nSearch: \"{}\"\n>", inner.1, inner.0);
                     if inner.2.is_empty() {
                         str.push_str("Nothing found");
                         str.push_str("<\n");
-                    }else{
+                    } else {
                         str.push_str(&inner.4[inner.2[pline]]);
                         str.push_str("<\n");
                         let len = inner.2.len();
@@ -404,15 +409,17 @@ impl Page {
                     }
                     str
                 }
-                Content::TextInput(inner)=>{
+                Content::TextInput(inner) => {
                     let mut str = inner.0.clone();
                     str.push_str(":\n>");
                     str.push_str(&inner.1);
                     str.push('<');
                     str
                 }
-                Content::CustomPageRender(inner)=>{
-                    inner((0, char::from_u32(0).unwrap()), (size.0, size.1-4)).0.unwrap()
+                Content::CustomPageRender(inner) => {
+                    inner((0, char::from_u32(0).unwrap()), (size.0, size.1 - 4))
+                        .0
+                        .unwrap()
                 }
             };
             let content = {
@@ -423,7 +430,7 @@ impl Page {
                 }
                 str.encode_utf16().collect::<Vec<u16>>()
             };
-            ter.set_pos((size.0-entitle.len()) as i16/2, 0)?;
+            ter.set_pos((size.0 - entitle.len()) as i16 / 2, 0)?;
             if WriteConsoleW(handle, &entitle, None, None).is_err() {
                 return Err(());
             };
@@ -444,7 +451,8 @@ impl Page {
             if WriteConsoleW(
                 handle,
                 &std::iter::repeat(' ' as u16)
-                    .take(size.0 * (size.1 - 4)).collect::<Vec<u16>>(),
+                    .take(size.0 * (size.1 - 4))
+                    .collect::<Vec<u16>>(),
                 None,
                 None,
             )

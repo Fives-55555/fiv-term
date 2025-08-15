@@ -4,7 +4,9 @@ use std::{iter::FusedIterator, sync::Mutex};
 use windows::Win32::{
     Foundation::HANDLE,
     System::Console::{
-        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, ReadConsoleInputW, SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, COORD, INPUT_RECORD, KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE
+        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, ReadConsoleInputW,
+        SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, COORD, INPUT_RECORD,
+        KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     },
 };
 
@@ -125,7 +127,7 @@ impl Terminal {
             let mut coninfo: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
             if GetConsoleScreenBufferInfo(handle, &mut coninfo).is_ok() {
                 let size = coninfo.srWindow;
-                let (x, y) = (size.Right-size.Left, size.Bottom-size.Top);
+                let (x, y) = (size.Right - size.Left, size.Bottom - size.Top);
                 return Ok((x as usize, y as usize));
             } else {
                 return Err(());
@@ -167,7 +169,12 @@ impl Terminal {
                 match buffer[0].EventType {
                     IKEY_EVENT => {
                         if buffer[0].Event.KeyEvent.bKeyDown.as_bool() {
-                            return Some((buffer[0].Event.KeyEvent.wVirtualKeyCode, char::from_u32(buffer[0].Event.KeyEvent.uChar.UnicodeChar.into()).or(Some(' ')).unwrap()));
+                            return Some((
+                                buffer[0].Event.KeyEvent.wVirtualKeyCode,
+                                char::from_u32(buffer[0].Event.KeyEvent.uChar.UnicodeChar.into())
+                                    .or(Some(' '))
+                                    .unwrap(),
+                            ));
                         }
                     }
                     _ => return None,

@@ -1,4 +1,3 @@
-use fiv::traits::WS;
 use std::io::stdin;
 
 pub struct Commands {
@@ -69,7 +68,9 @@ impl Commands {
         self.com.clone()
     }
     pub fn from_string(mut src: String) -> Result<Commands, ()> {
-        src.trima();
+        src = src
+            .trim_matches(|ch| ch == ' ' || ch == '\n' || ch == '\r')
+            .to_string();
         if src.is_empty() {
             return Err(());
         };

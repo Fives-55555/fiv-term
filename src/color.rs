@@ -1,7 +1,9 @@
 use crate::{get_handle_output, TERMINAL};
 use windows::Win32::System::Console::{
-        SetConsoleTextAttribute, BACKGROUND_BLUE, BACKGROUND_GREEN, BACKGROUND_INTENSITY, BACKGROUND_RED, COMMON_LVB_REVERSE_VIDEO, CONSOLE_CHARACTER_ATTRIBUTES, FOREGROUND_BLUE, FOREGROUND_GREEN, FOREGROUND_INTENSITY, FOREGROUND_RED
-    };
+    SetConsoleTextAttribute, BACKGROUND_BLUE, BACKGROUND_GREEN, BACKGROUND_INTENSITY,
+    BACKGROUND_RED, COMMON_LVB_REVERSE_VIDEO, CONSOLE_CHARACTER_ATTRIBUTES, FOREGROUND_BLUE,
+    FOREGROUND_GREEN, FOREGROUND_INTENSITY, FOREGROUND_RED,
+};
 
 pub struct Attributes {
     text_color: Color,
@@ -12,7 +14,7 @@ pub struct Color {
     red: bool,
     green: bool,
     blue: bool,
-    intensity: bool
+    intensity: bool,
 }
 
 pub trait ColorUtils {
@@ -26,10 +28,8 @@ pub trait ColorUtils {
             .is_ok()
             {
                 match TERMINAL {
-                    Some(ref ter)=> {
-                        ter.lock().unwrap().attr = attr
-                    },
-                    None=>panic!("Terminal not initilised")
+                    Some(ref ter) => ter.lock().unwrap().attr = attr,
+                    None => panic!("Terminal not initilised"),
                 }
                 Ok(())
             } else {
@@ -40,7 +40,7 @@ pub trait ColorUtils {
     fn switch_colors() -> Result<(), ()> {
         unsafe {
             let handle = get_handle_output!();
-            if SetConsoleTextAttribute(handle,  COMMON_LVB_REVERSE_VIDEO).is_ok() {
+            if SetConsoleTextAttribute(handle, COMMON_LVB_REVERSE_VIDEO).is_ok() {
                 Ok(())
             } else {
                 Err(())
@@ -94,7 +94,7 @@ impl Color {
             red: false,
             green: false,
             blue: false,
-            intensity: false
+            intensity: false,
         }
     }
     pub fn white() -> Self {
@@ -102,7 +102,7 @@ impl Color {
             red: true,
             green: true,
             blue: true,
-            intensity: false
+            intensity: false,
         }
     }
     pub fn red() -> Self {
@@ -110,7 +110,7 @@ impl Color {
             red: true,
             blue: false,
             green: false,
-            intensity: false
+            intensity: false,
         }
     }
     pub fn blue() -> Self {
@@ -118,7 +118,7 @@ impl Color {
             red: false,
             blue: true,
             green: false,
-            intensity: false
+            intensity: false,
         }
     }
     pub fn green() -> Self {
@@ -126,7 +126,7 @@ impl Color {
             red: false,
             blue: false,
             green: true,
-            intensity: false
+            intensity: false,
         }
     }
 }
