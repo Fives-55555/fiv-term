@@ -1,167 +1,77 @@
-use crate::{get_handle_output, TERMINAL};
-use windows::Win32::System::Console::{
-    SetConsoleTextAttribute, BACKGROUND_BLUE, BACKGROUND_GREEN, BACKGROUND_INTENSITY,
-    BACKGROUND_RED, COMMON_LVB_REVERSE_VIDEO, CONSOLE_CHARACTER_ATTRIBUTES, FOREGROUND_BLUE,
-    FOREGROUND_GREEN, FOREGROUND_INTENSITY, FOREGROUND_RED,
+use windows::{
+    core::Result,
+    Win32::System::Console::{SetConsoleTextAttribute, CONSOLE_CHARACTER_ATTRIBUTES},
 };
 
-pub struct Attributes {
-    text_color: Color,
-    backgound_color: Color,
+use crate::terminal::ScreenBuffer;
+
+#[repr(u16)]
+#[derive(Clone, Copy)]
+pub enum Attributes {
+    // Foreground Color
+    FGBlue = 1,      //FOREGROUND_BLUE
+    FGGreen = 2,     //FOREGROUND_GREEN
+    FGRed = 4,       //FOREGROUND_RED
+    FGIntensity = 8, //FOREGROUND_INTENSITY
+    // Background Color
+    BGBlue = 16,       //BACKGROUND_BLUE
+    BGGreen = 32,      //BACKGROUND_GREEN
+    BGRed = 64,        //BACKGROUND_RED
+    BDIntensity = 128, //BACKGROUND_INTENSITY
+    // Common idk
+    CMLVBLeading = 256,  //COMMON_LVB_
+    CMLVBTrailing = 512, //COMMON_LVB_
+    // Common Grid Idk
+    CMLVBHorizontal = 1024, //COMMON_LVB_
+    CMLVBLVertical = 2048,  //COMMON_LVB_
+    CMLVBRVertical = 4096,  //COMMON_LVB_
+    // Common Tool?
+    CMLVBReverse = 16384,    //COMMON_LVB_REVERSE_VIDEO
+    CMLVBUnderscore = 32768, //COMMON_LVB_UNDERSCORE
 }
 
-pub struct Color {
-    red: bool,
-    green: bool,
-    blue: bool,
-    intensity: bool,
+impl Attributes {
+    pub fn set(buffer: ScreenBuffer, attr: Attributes) -> Result<()> {
+        unsafe { SetConsoleTextAttribute(buffer.handle(), attr.as_attr()) }
+    }
+    pub fn as_attr(&self) -> CONSOLE_CHARACTER_ATTRIBUTES {
+        CONSOLE_CHARACTER_ATTRIBUTES(*self as u16)
+    }
+    pub fn as_color(&self) -> Color {
+        Color(*self as u16 as u8)
+    }
 }
 
-pub trait ColorUtils {
-    fn set_attr(attr: Attributes) -> Result<(), ()> {
-        unsafe {
-            let handle = get_handle_output!();
-            if SetConsoleTextAttribute(
-                handle,
-                attr.backgound_color.get(false) | attr.text_color.get(true),
-            )
-            .is_ok()
-            {
-                match TERMINAL {
-                    Some(ref ter) => ter.lock().unwrap().attr = attr,
-                    None => panic!("Terminal not initilised"),
-                }
-                Ok(())
-            } else {
-                Err(())
-            }
-        }
-    }
-    fn switch_colors() -> Result<(), ()> {
-        unsafe {
-            let handle = get_handle_output!();
-            if SetConsoleTextAttribute(handle, COMMON_LVB_REVERSE_VIDEO).is_ok() {
-                Ok(())
-            } else {
-                Err(())
-            }
-        }
-    }
-}
+#[derive(Clone, Copy)]
+pub struct Color(u8);
 
 impl Color {
-    fn get(&self, con: bool) -> CONSOLE_CHARACTER_ATTRIBUTES {
-        if con {
-            (if self.blue {
-                FOREGROUND_BLUE
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.red {
-                FOREGROUND_RED
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.green {
-                FOREGROUND_GREEN
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.intensity {
-                FOREGROUND_INTENSITY
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            })
-        } else {
-            (if self.blue {
-                BACKGROUND_BLUE
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.red {
-                BACKGROUND_RED
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.green {
-                BACKGROUND_GREEN
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            }) | (if self.intensity {
-                BACKGROUND_INTENSITY
-            } else {
-                CONSOLE_CHARACTER_ATTRIBUTES(0)
-            })
-        }
+    pub fn as_attr(&self) -> CONSOLE_CHARACTER_ATTRIBUTES {
+        CONSOLE_CHARACTER_ATTRIBUTES(self.0 as u16)
     }
-    pub fn black() -> Self {
-        Color {
-            red: false,
-            green: false,
-            blue: false,
-            intensity: false,
-        }
+    pub const fn get(&self, id: u8) -> bool {
+        self.0 & (1 << id) != 0
     }
-    pub fn white() -> Self {
-        Color {
-            red: true,
-            green: true,
-            blue: true,
-            intensity: false,
-        }
+    pub const fn set(&mut self, id: u8, value: bool) {
+        self.0 = (self.0 & !(1 << id)) | ((value as u8) << id)
     }
-    pub fn red() -> Self {
-        Color {
-            red: true,
-            blue: false,
-            green: false,
-            intensity: false,
-        }
-    }
-    pub fn blue() -> Self {
-        Color {
-            red: false,
-            blue: true,
-            green: false,
-            intensity: false,
-        }
-    }
-    pub fn green() -> Self {
-        Color {
-            red: false,
-            blue: false,
-            green: true,
-            intensity: false,
-        }
-    }
+    pub const ID_FG_BLUE: u8 = 0;
+    pub const ID_FG_GREEN: u8 = 1;
+    pub const ID_FG_RED: u8 = 2;
+    pub const ID_FG_INT: u8 = 3;
+    pub const ID_BG_BLUE: u8 = 4;
+    pub const ID_BG_GREEN: u8 = 5;
+    pub const ID_BG_RED: u8 = 6;
+    pub const ID_BG_INT: u8 = 7;
+
+    pub const FG_WHITE: Color = Color(0b00000111);
+    pub const BG_WHITE: Color = Color(0b01110000);
+
+    pub const BLACK: Color = Color(0);
 }
 
 impl From<CONSOLE_CHARACTER_ATTRIBUTES> for Attributes {
     fn from(value: CONSOLE_CHARACTER_ATTRIBUTES) -> Self {
-        let mut text = Color::white();
-        let mut background = Color::black();
-        if (value & FOREGROUND_BLUE).0 != 0 {
-            text.blue = true
-        }
-        if (value & FOREGROUND_RED).0 != 0 {
-            text.red = true
-        }
-        if (value & FOREGROUND_GREEN).0 != 0 {
-            text.green = true
-        }
-        if (value & FOREGROUND_INTENSITY).0 != 0 {
-            text.intensity = true
-        }
-        if (value & BACKGROUND_BLUE).0 != 0 {
-            background.blue = true
-        }
-        if (value & BACKGROUND_RED).0 != 0 {
-            background.red = true
-        }
-        if (value & BACKGROUND_GREEN).0 != 0 {
-            background.green = true
-        }
-        if (value & BACKGROUND_INTENSITY).0 != 0 {
-            background.intensity = true
-        }
-        Attributes {
-            text_color: text,
-            backgound_color: background,
-        }
+        unsafe { std::mem::transmute(value.0) }
     }
 }

@@ -1,6 +1,16 @@
-use crate::{get_handle_output, LenLinesAdd, Terminal, TERMINAL};
+use crate::{
+    get_handle_output,
+    terminal::{ScreenBuffer, Terminal, TerminalStr},
+    LenLinesAdd,
+};
 use std::{thread::sleep, time::Duration};
-use windows::Win32::System::Console::WriteConsoleW;
+use windows::{
+    core::Result,
+    Win32::{
+        Foundation::HANDLE,
+        System::Console::{WriteConsoleW, CHAR_INFO, CHAR_INFO_0},
+    },
+};
 
 pub const MIN_HEIGHT: usize = 7;
 pub const MIN_WIDTH: usize = 75;
@@ -40,30 +50,25 @@ pub struct Page {
     update: Option<fn(menü: &mut Content) -> bool>,
     //Content
     content: Content,
+    //Terminal Buffer
+    buffer: HANDLE,
 }
 
 pub trait PageUtils {
-    fn open(&self, page: &mut Page) -> Result<(), ()>;
+    fn open(&self, page: &mut Page) -> Result<()>;
 }
 
 impl PageUtils for Terminal {
     ///Opens a Pages
-    fn open(&self, page: &mut Page) -> Result<(), ()> {
+    fn open(&self, page: &mut Page) -> Result<()> {
         let mut line = 0;
 
-        #[cfg(not(feature = "debug"))]
-        let size = self.get_size()?;
-        //Terminal Handles does not have high enough rights in a debugger
-
-        #[cfg(feature = "debug")]
-        let size = (75, 20);
-
-        self.blank()?;
+        let screen = ScreenBuffer::new_buffer()?;
 
         Page::print_page(self, &page.title, &page.content, line)?;
 
         loop {
-            sleep(Duration::from_millis(10));
+            sleep(Duration::from_millis(30));
 
             match self.get_key() {
                 Some(x) => match x.0 {
@@ -158,19 +163,15 @@ impl PageUtils for Terminal {
                                 unsafe {
                                     self.set_pos(0, 2)?;
                                     let handle = get_handle_output!();
-                                    if WriteConsoleW(
+                                    WriteConsoleW(
                                         handle,
                                         &view.encode_utf16().collect::<Vec<u16>>(),
                                         None,
                                         None,
                                     )
-                                    .is_err()
-                                    {
-                                        return Err(());
-                                    };
                                 }
                             }
-                            None => (),
+                            None => Ok(()),
                         },
                         Content::SearchSelectList(inner) => {
                             match x.0 {
@@ -319,118 +320,143 @@ impl Page {
         x.content = Content::ConfirmPage((str.to_string(), func));
         x
     }
-    fn print_page(ter: &Terminal, title: &String, page: &Content, pline: usize) -> Result<(), ()> {
+    fn print_page(
+        handle: ScreenBuffer,
+        title: &String,
+        page: &Content,
+        pline: usize,
+    ) -> Result<()> {
         #[cfg(not(feature = "debug"))]
-        let size = ter.get_size().unwrap();
+        let size = handle.get_size()?;
 
         #[cfg(feature = "debug")]
         let size = (75, 20);
 
         if size.0 < MIN_WIDTH && size.1 < MIN_HEIGHT {
-            return Err(());
+            todo!()
         }
 
-        unsafe {
-            let handle = get_handle_output!();
-            let entitle = title.encode_utf16().collect::<Vec<u16>>();
-            let content = match page {
-                Content::InfoPage(inner) => {
-                    let mut str = String::new();
-                    let mut i = 0;
-                    for line in inner.lenlines(size.0) {
-                        if i >= pline && i < pline + size.1 - 4 {
-                            str.push_str(line);
-                            str.push('\n');
-                        }
-                        i += 1;
+        let limiter = TerminalStr::new(
+            size.0,
+            1,
+            Some(CHAR_INFO {
+                Attributes: 0,
+                Char: CHAR_INFO_0 {
+                    UnicodeChar: b'=' as u16,
+                },
+            }),
+        );
+
+        let enc_title = TerminalStr::new(title.len(), 1, None);
+
+        let i = 0;
+        let slice = &mut enc_title[0];
+
+        for char in title.encode_utf16() {
+            slice[i].Char.UnicodeChar = char;
+            i += 1;
+        }
+
+        let content = match page {
+            Content::InfoPage(inner) => {
+                let mut str = String::new();
+                let mut i = 0;
+                for line in inner.lenlines(size.0) {
+                    if i >= pline && i < pline + size.1 - 4 {
+                        str.push_str(line);
+                        str.push('\n');
                     }
-                    str
+                    i += 1;
                 }
-                Content::ConfirmPage((inner, _)) => {
-                    let mut str = String::new();
-                    let mut i = 0;
-                    str.push_str("Please confirm or reject:\n");
-                    for line in inner.lenlines(size.0) {
-                        if i >= pline && i < pline + size.1 - 5 {
-                            str.push_str(line);
-                            str.push('\n');
-                        }
-                        i += 1;
+                str
+            }
+            Content::ConfirmPage((inner, _)) => {
+                let mut str = String::new();
+                let mut i = 0;
+                str.push_str("Please confirm or reject:\n");
+                for line in inner.lenlines(size.0) {
+                    if i >= pline && i < pline + size.1 - 5 {
+                        str.push_str(line);
+                        str.push('\n');
                     }
-                    str
+                    i += 1;
                 }
-                Content::SubMenü(inner) => {
-                    let mut str = String::from("Choose a Page:\n>");
-                    str.push_str(&inner[pline].title);
+                str
+            }
+            Content::SubMenü(inner) => {
+                let mut str = String::from("Choose a Page:\n>");
+                str.push_str(&inner[pline].title);
+                str.push_str("<\n");
+                let len = inner.len();
+                for i in 0..size.1 - 6 {
+                    if i + pline + 1 < len {
+                        str.push_str(&inner[pline + i + 1].title);
+                        str.push('\n');
+                    }
+                }
+                str
+            }
+            Content::SelectList(inner) => {
+                let mut str = inner.0.clone();
+                str.push_str(":\n>");
+                if inner.1.is_empty() {
+                    str.push_str("Nothing in here");
                     str.push_str("<\n");
-                    let len = inner.len();
+                } else {
+                    str.push_str(&inner.1[pline]);
+                    str.push_str("<\n");
+                    let len = inner.1.len();
                     for i in 0..size.1 - 6 {
                         if i + pline + 1 < len {
-                            str.push_str(&inner[pline + i + 1].title);
+                            str.push_str(&inner.1[pline + i + 1]);
                             str.push('\n');
                         }
                     }
-                    str
                 }
-                Content::SelectList(inner) => {
-                    let mut str = inner.0.clone();
-                    str.push_str(":\n>");
-                    if inner.1.is_empty() {
-                        str.push_str("Nothing in here");
-                        str.push_str("<\n");
-                    } else {
-                        str.push_str(&inner.1[pline]);
-                        str.push_str("<\n");
-                        let len = inner.1.len();
-                        for i in 0..size.1 - 6 {
-                            if i + pline + 1 < len {
-                                str.push_str(&inner.1[pline + i + 1]);
-                                str.push('\n');
-                            }
+                str
+            }
+            Content::SearchSelectList(inner) => {
+                let mut str = format!("{}:\nSearch: \"{}\"\n>", inner.1, inner.0);
+                if inner.2.is_empty() {
+                    str.push_str("Nothing found");
+                    str.push_str("<\n");
+                } else {
+                    str.push_str(&inner.4[inner.2[pline]]);
+                    str.push_str("<\n");
+                    let len = inner.2.len();
+                    for i in 0..size.1 - 7 {
+                        if i + pline + 1 < len {
+                            str.push_str(&inner.4[inner.2[pline + i + 1]]);
+                            str.push('\n');
                         }
                     }
-                    str
                 }
-                Content::SearchSelectList(inner) => {
-                    let mut str = format!("{}:\nSearch: \"{}\"\n>", inner.1, inner.0);
-                    if inner.2.is_empty() {
-                        str.push_str("Nothing found");
-                        str.push_str("<\n");
-                    } else {
-                        str.push_str(&inner.4[inner.2[pline]]);
-                        str.push_str("<\n");
-                        let len = inner.2.len();
-                        for i in 0..size.1 - 7 {
-                            if i + pline + 1 < len {
-                                str.push_str(&inner.4[inner.2[pline + i + 1]]);
-                                str.push('\n');
-                            }
-                        }
-                    }
-                    str
-                }
-                Content::TextInput(inner) => {
-                    let mut str = inner.0.clone();
-                    str.push_str(":\n>");
-                    str.push_str(&inner.1);
-                    str.push('<');
-                    str
-                }
-                Content::CustomPageRender(inner) => {
-                    inner((0, char::from_u32(0).unwrap()), (size.0, size.1 - 4))
-                        .0
-                        .unwrap()
-                }
-            };
-            let content = {
-                let mut str = String::new();
-                for i in content.lenlines(size.0) {
-                    str.push_str(i);
-                    str.push('\n');
-                }
-                str.encode_utf16().collect::<Vec<u16>>()
-            };
-            ter.set_pos((size.0 - entitle.len()) as i16 / 2, 0)?;
+                str
+            }
+            Content::TextInput(inner) => {
+                let mut str = inner.0.clone();
+                str.push_str(":\n>");
+                str.push_str(&inner.1);
+                str.push('<');
+                str
+            }
+            Content::CustomPageRender(inner) => {
+                inner((0, char::from_u32(0).unwrap()), (size.0, size.1 - 4))
+                    .0
+                    .unwrap()
+            }
+        };
+        let content = {
+            let mut str = String::new();
+            for i in content.lenlines(size.0) {
+                str.push_str(i);
+                str.push('\n');
+            }
+            str.encode_utf16().collect::<Vec<u16>>()
+        };
+        ter.set_pos((size.0 - entitle.len()) as i16 / 2, 0)?;
+
+        unsafe {
             if WriteConsoleW(handle, &entitle, None, None).is_err() {
                 return Err(());
             };

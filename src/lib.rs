@@ -1,14 +1,21 @@
 use fiv_log::{log, ERROR};
-use std::{iter::FusedIterator, sync::Mutex};
+use std::iter::FusedIterator;
 
-use windows::Win32::{
-    Foundation::HANDLE,
-    System::Console::{
-        GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, ReadConsoleInputW,
-        SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO, COORD, INPUT_RECORD,
-        KEY_EVENT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+use windows::{
+    core::Result,
+    Win32::{
+        Foundation::HANDLE,
+        System::Console::{
+            CreateConsoleScreenBuffer, GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents,
+            GetStdHandle, ReadConsoleInputW, SetConsoleActiveScreenBuffer,
+            SetConsoleCursorPosition, WriteConsoleW, CONSOLE_SCREEN_BUFFER_INFO,
+            CONSOLE_TEXTMODE_BUFFER, COORD, INPUT_RECORD, KEY_EVENT, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
+        },
     },
 };
+
+mod terminal;
 
 mod commands;
 mod loadbar;
@@ -22,257 +29,6 @@ pub use crate::color::{Attributes, Color, ColorUtils};
 pub use crate::page::{Content, Page, PageUtils};
 
 pub use crate::loadbar::Loadbar;
-
-static mut TERMINAL: Option<Mutex<TerminalStat>> = None;
-
-struct TerminalStat {
-    pub output: HANDLE,
-    pub input: HANDLE,
-    pub attr: Attributes,
-}
-
-pub struct Terminal {}
-
-pub(crate) fn get_console_handle() -> Result<(HANDLE, HANDLE), ()> {
-    unsafe {
-        let output = GetStdHandle(STD_OUTPUT_HANDLE);
-        let input = GetStdHandle(STD_INPUT_HANDLE);
-        match (input, output) {
-            (Ok(input), Ok(output)) if !(input.is_invalid() && output.is_invalid()) => {
-                return Ok((input, output))
-            }
-            _ => return Err(()),
-        }
-    }
-}
-
-impl Terminal {
-    pub fn new() -> Result<Terminal, ()> {
-        unsafe {
-            if TERMINAL.is_some() {
-                return Err(());
-            }
-            match get_console_handle() {
-                Ok(handle) => {
-                    #[cfg(not(feature = "debug"))]
-                    let attr = {
-                        let mut info = std::mem::zeroed();
-                        if GetConsoleScreenBufferInfo(handle.1, core::ptr::addr_of_mut!(info))
-                            .is_err()
-                        {
-                            return Err(());
-                        }
-                        Attributes::from(info.wAttributes)
-                    };
-                    #[cfg(feature = "debug")]
-                    let attr = {
-                        use windows::Win32::System::Console::CONSOLE_CHARACTER_ATTRIBUTES;
-                        Attributes::from(CONSOLE_CHARACTER_ATTRIBUTES(0))
-                    };
-                    TERMINAL = Some(Mutex::new(TerminalStat {
-                        input: handle.0,
-                        output: handle.1,
-                        attr: attr,
-                    }));
-                    return Ok(Terminal {});
-                }
-                Err(_) => log(ERROR, "Couldnt get Console Handle"),
-            }
-        }
-        Err(())
-    }
-    pub fn clear(&self) {
-        self.clear_history().unwrap();
-        self.blank().unwrap();
-    }
-    pub fn clear_history(&self) -> Result<(), ()> {
-        //ScrollConsoleScreenBufferA dosen t work because in cmd there is no scrollback only a main buffer, but in modern term. there are
-        unsafe {
-            let handle = get_handle_output!(noerr);
-            let sequence = "\x1b[3J".encode_utf16().collect::<Vec<u16>>();
-            if WriteConsoleW(handle, &sequence, None, None).is_err() {
-                return Err(());
-            };
-            self.set_pos(0, 0)?;
-            Ok(())
-        }
-    }
-    pub fn blank(&self) -> Result<(), ()> {
-        unsafe {
-            let handle = get_handle_output!(noerr);
-            let sequence = "\x1b[2J".encode_utf16().collect::<Vec<u16>>();
-            if WriteConsoleW(handle, &sequence, None, None).is_err() {
-                return Err(());
-            };
-            Ok(())
-        }
-    }
-}
-
-impl Terminal {
-    fn set_pos(&self, x: i16, y: i16) -> Result<(), ()> {
-        unsafe {
-            let handle = get_handle_output!();
-            let pos = COORD { X: x, Y: y };
-            if SetConsoleCursorPosition(handle, pos).is_err() {
-                return Err(());
-            };
-            Ok(())
-        }
-    }
-    fn get_size(&self) -> Result<(usize, usize), ()> {
-        unsafe {
-            let handle = get_handle_output!();
-
-            let mut coninfo: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
-            if GetConsoleScreenBufferInfo(handle, &mut coninfo).is_ok() {
-                let size = coninfo.srWindow;
-                let (x, y) = (size.Right - size.Left, size.Bottom - size.Top);
-                return Ok((x as usize, y as usize));
-            } else {
-                return Err(());
-            }
-        }
-    }
-    fn clear_footer(&self) {
-        unsafe {
-            let size = self.get_size().unwrap();
-            self.set_pos(0, size.1 as i16 - 1).unwrap();
-            let handle = get_handle_output!(noerr);
-            let buffer = std::iter::repeat(' ')
-                .take(size.0)
-                .collect::<String>()
-                .encode_utf16()
-                .collect::<Vec<u16>>();
-            WriteConsoleW(handle, &buffer, None, None).unwrap()
-        }
-    }
-}
-
-const IKEY_EVENT: u16 = KEY_EVENT as u16;
-
-impl Terminal {
-    pub fn get_key(&self) -> Option<(Key, char)> {
-        unsafe {
-            let handle = get_handle_input!(noerr);
-            let mut events: u32 = 0;
-            //Gets the amount of Input Events
-            if GetNumberOfConsoleInputEvents(handle, core::ptr::addr_of_mut!(events)).is_err() {
-                return None;
-            };
-            if events > 0 {
-                let mut buffer: [INPUT_RECORD; 1] = std::mem::zeroed();
-                let mut read: u32 = 0;
-                if ReadConsoleInputW(handle, &mut buffer, core::ptr::addr_of_mut!(read)).is_err() {
-                    return None;
-                }
-                match buffer[0].EventType {
-                    IKEY_EVENT => {
-                        if buffer[0].Event.KeyEvent.bKeyDown.as_bool() {
-                            return Some((
-                                buffer[0].Event.KeyEvent.wVirtualKeyCode,
-                                char::from_u32(buffer[0].Event.KeyEvent.uChar.UnicodeChar.into())
-                                    .or(Some(' '))
-                                    .unwrap(),
-                            ));
-                        }
-                    }
-                    _ => return None,
-                }
-            }
-            return None;
-        }
-    }
-}
-
-#[test]
-fn test() {
-    use crate::commands::{Action, Arg, Commands};
-    let t = std::time::SystemTime::now();
-    let ta = t.clone();
-
-    let _ = std::thread::spawn(move || {
-        if std::time::SystemTime::duration_since(&std::time::SystemTime::now(), ta)
-            .unwrap()
-            .as_secs()
-            > 20
-        {
-            std::process::exit(0x0)
-        }
-    });
-
-    log(fiv_log::INFO, "0");
-    let c = Commands::from_string("rust".to_string()).unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(c.args() == Vec::new());
-    log(fiv_log::INFO, "1");
-
-    let c = Commands::from_string("stop".to_string()).unwrap();
-    assert!(c.action() == Action::Stop);
-    assert!(c.args() == Vec::new());
-    log(fiv_log::INFO, "2");
-
-    let c = Commands::from_string("help".to_string()).unwrap();
-    assert!(c.action() == Action::Help);
-    assert!(c.args() == Vec::new());
-    log(fiv_log::INFO, "3");
-
-    let c = Commands::from_string("rust -t".to_string()).unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(c.args() == vec![Arg::Flag("t".to_string())]);
-    log(fiv_log::INFO, "4");
-
-    let c = Commands::from_string("rust --terminal".to_string()).unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(c.args() == vec![Arg::Flag("terminal".to_string())]);
-    log(fiv_log::INFO, "5");
-
-    let c = Commands::from_string("rust --terminal=true".to_string()).unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(c.args() == vec![Arg::Inner(("terminal".to_string(), "true".to_string()))]);
-    log(fiv_log::INFO, "6");
-
-    let c = Commands::from_string("rust --terminal=\"Is true\"".to_string()).unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(c.args() == vec![Arg::Inner(("terminal".to_string(), "Is true".to_string()))]);
-    log(fiv_log::INFO, "7");
-
-    let c = Commands::from_string("rust --terminal=\"Is true\" --rust=\"Is stupid\"".to_string())
-        .unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(
-        c.args()
-            == vec![
-                Arg::Inner(("terminal".to_string(), "Is true".to_string())),
-                Arg::Inner(("rust".to_string(), "Is stupid".to_string()))
-            ]
-    );
-    log(fiv_log::INFO, "8");
-
-    let c = Commands::from_string(
-        "rust -t -r --terminal --rust --terminal=\"Is true\" --rust=\"Is stupid\"".to_string(),
-    )
-    .unwrap();
-    assert!(c.action() == Action::Unknown("rust".to_string()));
-    assert!(
-        c.args()
-            == vec![
-                Arg::Flag("t".to_string()),
-                Arg::Flag("r".to_string()),
-                Arg::Flag("terminal".to_string()),
-                Arg::Flag("rust".to_string()),
-                Arg::Inner(("terminal".to_string(), "Is true".to_string())),
-                Arg::Inner(("rust".to_string(), "Is stupid".to_string()))
-            ]
-    );
-    log(fiv_log::INFO, "9");
-
-    assert!(Commands::from_string("".to_string()).is_err());
-    log(fiv_log::INFO, "10");
-}
-
-//https://learn.microsoft.com/de-de/windows/win32/inputdev/virtual-key-codes
-pub type Key = u16;
 
 pub trait LenLinesAdd {
     fn lenlines(&self, len: usize) -> LenLines<'_>;
@@ -400,4 +156,13 @@ impl LenLinesAdd for String {
             len: len,
         }
     }
+}
+
+#[cfg(not(feature = "ter_test"))]
+#[test]
+fn try_vis() -> Result<()> {
+    use crate::terminal::Terminal;
+
+    let terminal = Terminal::new();
+    Ok(())
 }

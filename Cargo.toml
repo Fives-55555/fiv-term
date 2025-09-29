@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-windows = {version = "0.58.0", features = ["Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_Security_Authorization"]}
-fiv-log={git="https://github.com/fives-55555/fiv-log"}
+windows = { version = "0.62.0", features = [
+    "Win32_System_Console",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Security_Authorization",
+] }
+fiv-log = { git = "https://github.com/fives-55555/fiv-log" }
 
 [features]
 debug = []
+ter_test = []
+virt_keys = []

@@ -5,7 +5,7 @@ use std::{
 };
 use windows::Win32::System::Console::{WriteConsoleA, WriteConsoleW};
 
-use crate::{get_handle_output, Terminal, TERMINAL};
+use crate::{get_handle_output, Terminal};
 
 ///A Loadbar at the footer
 pub trait Loadbar {
