@@ -1,9 +1,13 @@
 use windows::{
     core::Result,
-    Win32::System::Console::{SetConsoleTextAttribute, CONSOLE_CHARACTER_ATTRIBUTES},
+    Win32::{
+        Foundation::HANDLE,
+        System::Console::{
+            GetConsoleScreenBufferInfo, SetConsoleTextAttribute, CONSOLE_CHARACTER_ATTRIBUTES,
+            CONSOLE_SCREEN_BUFFER_INFO,
+        },
+    },
 };
-
-use crate::terminal::ScreenBuffer;
 
 #[repr(u16)]
 #[derive(Clone, Copy)]
@@ -19,8 +23,8 @@ pub enum Attributes {
     BGRed = 64,        //BACKGROUND_RED
     BDIntensity = 128, //BACKGROUND_INTENSITY
     // Common idk
-    CMLVBLeading = 256,  //COMMON_LVB_
-    CMLVBTrailing = 512, //COMMON_LVB_
+    CMLVBLeading = 256,  //COMMON_LVB_LEADING_BYTE
+    CMLVBTrailing = 512, //COMMON_LVB_TRAILING_BYTE
     // Common Grid Idk
     CMLVBHorizontal = 1024, //COMMON_LVB_
     CMLVBLVertical = 2048,  //COMMON_LVB_
@@ -31,6 +35,12 @@ pub enum Attributes {
 }
 
 impl Attributes {
+    pub fn is_contained(&self, value: Attributes) -> bool {
+        (*self as u16 & value as u16) != 0
+    }
+    pub fn add(&mut self, value: Attributes) {
+        *self = unsafe { std::mem::transmute(*self as u16 | value as u16) };
+    }
     pub fn set(buffer: ScreenBuffer, attr: Attributes) -> Result<()> {
         unsafe { SetConsoleTextAttribute(buffer.handle(), attr.as_attr()) }
     }
@@ -38,12 +48,17 @@ impl Attributes {
         CONSOLE_CHARACTER_ATTRIBUTES(*self as u16)
     }
     pub fn as_color(&self) -> Color {
-        Color(*self as u16 as u8)
+        Color()
+    }
+    pub fn get_attrs(handle: HANDLE) -> Result<Attributes> {
+        let mut buffer = CONSOLE_SCREEN_BUFFER_INFO::default();
+        #[cfg(not(feature = "debug"))]
+        unsafe {
+            GetConsoleScreenBufferInfo(handle, &mut buffer)?
+        }
+        Ok(unsafe { std::mem::transmute(buffer.wAttributes) })
     }
 }
-
-#[derive(Clone, Copy)]
-pub struct Color(u8);
 
 impl Color {
     pub fn as_attr(&self) -> CONSOLE_CHARACTER_ATTRIBUTES {
@@ -74,4 +89,17 @@ impl From<CONSOLE_CHARACTER_ATTRIBUTES> for Attributes {
     fn from(value: CONSOLE_CHARACTER_ATTRIBUTES) -> Self {
         unsafe { std::mem::transmute(value.0) }
     }
+}
+
+//4BIt
+#[repr(u8)]
+pub enum AnsiColor {
+    Black,
+    Red
+}
+
+pub struct Color {
+    red: u8,
+    green: u8,
+    blue: u8,
 }

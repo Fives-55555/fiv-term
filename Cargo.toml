@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 windows = { version = "0.62.0", features = [
-    "Win32_System_Console",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_Security_Authorization",
+  "Win32_System_Console",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_Security_Authorization",
 ] }
 fiv-log = { git = "https://github.com/fives-55555/fiv-log" }
 

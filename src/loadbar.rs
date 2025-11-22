@@ -1,79 +1,109 @@
 use std::{
     sync::{Arc, Mutex},
-    thread::{self, sleep, JoinHandle},
+    thread::sleep,
     time::Duration,
 };
-use windows::Win32::System::Console::{WriteConsoleA, WriteConsoleW};
 
-use crate::{get_handle_output, Terminal};
+use windows::{
+    core::Result,
+    Win32::System::Console::{WriteConsoleA, WriteConsoleW},
+};
+
+use crate::terminal::{ScreenBuffer, Terminal, TerminalStr};
+
+struct LoadbarData {
+    handle: ScreenBuffer,
+    size: (usize, usize),
+    loadbar: TerminalStr,
+    progress: u8,
+}
+
+impl LoadbarData {
+    pub fn new(handle: ScreenBuffer) -> Result<LoadbarData> {
+        let size = handle.get_size()?;
+        Ok(LoadbarData {
+            loadbar: TerminalStr::new(size.0, 1, None),
+            handle: handle,
+            size: size,
+            progress: 0,
+        })
+    }
+    pub fn check_size(&mut self) -> Result<()> {
+        let size = self.handle.get_size()?;
+        if size != self.size {
+            self.loadbar.resize(size.0, size.1);
+        }
+        Ok(())
+    }
+    pub fn set_progress(&mut self, value: u8) {
+        self.progress = value
+    }
+    pub fn render(&mut self) -> Result<()> {
+        let pos = (0, self.size.1 - 1);
+        self.handle.write_buffer(pos, buffer)
+    }
+}
 
 ///A Loadbar at the footer
 pub trait Loadbar {
-    fn loadbar(self, an: Arc<Mutex<u8>>) -> JoinHandle<Terminal>;
-    fn loadbarb(self, an: Arc<Mutex<u8>>) -> Terminal;
+    fn loadbar(self, time_ms: usize);
+    fn loadbar_async(self, an: Arc<Mutex<u8>>);
 }
 
 impl Loadbar for Terminal {
-    fn loadbar(self, an: Arc<Mutex<u8>>) -> JoinHandle<Terminal> {
-        thread::spawn(move || {
-            let handle = unsafe { get_handle_output!(noerr) };
-            let mut size = self.get_size().unwrap();
-            let mut s = String::with_capacity(size.0);
-            loop {
-                size = self.get_size().unwrap();
-                s.clear();
-                self.clear_footer();
-                self.set_pos(0, size.1 as i16 - 1).unwrap();
-                let bar = size.0 - 9;
-                let n = loop {
-                    match an.lock() {
-                        Ok(x) => {
-                            if *x <= 100 {
-                                break *x;
-                            } else {
-                                continue;
-                            }
+    fn loadbar(self, time_ms: usize) {
+        let handle = self.get_buffer();
+        //FIXME: Proper Error Hadling
+        let loadbar = LoadbarData::new(handle).unwrap();
+        loop {
+            self.set_pos(0, size.1 as i16 - 1).unwrap();
+            let bar = size.0 - 9;
+            let n = loop {
+                match an.lock() {
+                    Ok(x) => {
+                        if *x <= 100 {
+                            break *x;
+                        } else {
+                            continue;
                         }
-                        Err(_) => continue,
                     }
-                };
-                if n == 100 {
-                    self.clear_footer();
-                    s.push_str(" 100% Complete");
-                    unsafe { WriteConsoleA(handle, s.as_bytes(), None, None).unwrap() };
-                    sleep(Duration::from_secs(1));
-                    break;
+                    Err(_) => continue,
                 }
-                let f = bar as f64 * (n as f64 / 100.0);
-                s.push_str(" [");
+            };
+            if n == 100 {
+                self.clear_footer();
+                s.push_str(" 100% Complete");
+                unsafe { WriteConsoleA(handle, s.as_bytes(), None, None).unwrap() };
+                sleep(Duration::from_secs(1));
+                break;
+            }
+            let f = bar as f64 * (n as f64 / 100.0);
+            s.push_str(" [");
+            s.push_str(
+                std::iter::repeat('█')
+                    .take(f.floor() as usize)
+                    .collect::<String>()
+                    .as_str(),
+            );
+            if f.floor() != f {
+                s.push('▌');
+            } else {
+                s.push(' ');
+            }
+            if (f as usize) < bar - 1 {
                 s.push_str(
-                    std::iter::repeat('█')
-                        .take(f.floor() as usize)
+                    std::iter::repeat(' ')
+                        .take((bar - 1) - f as usize)
                         .collect::<String>()
                         .as_str(),
                 );
-                if f.floor() != f {
-                    s.push('▌');
-                } else {
-                    s.push(' ');
-                }
-                if (f as usize) < bar - 1 {
-                    s.push_str(
-                        std::iter::repeat(' ')
-                            .take((bar - 1) - f as usize)
-                            .collect::<String>()
-                            .as_str(),
-                    );
-                };
-                s.push_str(format!("]  {}%", n).as_str());
-                unsafe {
-                    WriteConsoleW(handle, &s.encode_utf16().collect::<Vec<u16>>(), None, None)
-                        .unwrap()
-                };
-                sleep(Duration::from_micros(16666));
-            }
-            return self;
-        })
+            };
+            s.push_str(format!("]  {}%", n).as_str());
+            unsafe {
+                WriteConsoleW(handle, &s.encode_utf16().collect::<Vec<u16>>(), None, None).unwrap()
+            };
+            sleep(Duration::from_micros(16666));
+        }
     }
     fn loadbarb(self, an: Arc<Mutex<u8>>) -> Terminal {
         let handle = unsafe { get_handle_output!(noerr) };

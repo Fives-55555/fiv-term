@@ -8,11 +8,10 @@ use windows::{
     Win32::{
         Foundation::HANDLE,
         System::Console::{
-            CreateConsoleScreenBuffer, GetNumberOfConsoleInputEvents, GetStdHandle,
-            ReadConsoleInputW, SetConsoleActiveScreenBuffer, SetConsoleCursorPosition,
-            WriteConsoleOutputCharacterW, WriteConsoleOutputW, CHAR_INFO, CHAR_INFO_0,
-            CONSOLE_TEXTMODE_BUFFER, COORD, INPUT_RECORD, KEY_EVENT, SMALL_RECT, STD_INPUT_HANDLE,
-            STD_OUTPUT_HANDLE,
+            CreateConsoleScreenBuffer, GetStdHandle, ReadConsoleInputW,
+            SetConsoleActiveScreenBuffer, SetConsoleCursorPosition, WriteConsoleOutputCharacterW,
+            WriteConsoleOutputW, CHAR_INFO, CHAR_INFO_0, CONSOLE_TEXTMODE_BUFFER, COORD,
+            INPUT_RECORD, KEY_EVENT, SMALL_RECT, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
         },
     },
 };
@@ -30,44 +29,23 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new() -> Result<Terminal> {
-        unsafe {
-            match ScreenBuffer::get_std_handles() {
-                Ok(handles) => {
-                    #[cfg(not(feature = "debug"))]
-                    let attr = {
-                        use windows::Win32::System::Console::{
-                            GetConsoleScreenBufferInfo, CONSOLE_SCREEN_BUFFER_INFO,
-                        };
-
-                        let mut info: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
-                        GetConsoleScreenBufferInfo(
-                            handles.output.0,
-                            &mut info as *mut CONSOLE_SCREEN_BUFFER_INFO,
-                        )?;
-                        Attributes::from(info.wAttributes)
-                    };
-                    #[cfg(feature = "debug")]
-                    let attr = {
-                        use windows::Win32::System::Console::CONSOLE_CHARACTER_ATTRIBUTES;
-                        Attributes::from(CONSOLE_CHARACTER_ATTRIBUTES(0))
-                    };
-                    return Ok(Terminal {
-                        active_buffer: handles.output,
-                        std_handles: handles,
-                        attributes: attr,
-                        title_size: 0,
-                        colors: (),
-                    });
-                }
-                Err(err) => {
-                    log(ERROR, "Couldnt get Console Handle");
-                    return Err(err);
-                }
+        match ScreenBuffer::get_std_handles() {
+            Ok(handles) => {
+                return Ok(Terminal {
+                    active_buffer: handles.output,
+                    std_handles: handles,
+                    title_size: 0,
+                    colors: (),
+                });
+            }
+            Err(err) => {
+                log(ERROR, "Could not get Standart Handles");
+                return Err(err);
             }
         }
     }
     pub fn set_buffer(&mut self, buffer: ScreenBuffer) -> Result<()> {
-        unsafe { SetConsoleActiveScreenBuffer(buffer.0)? };
+        unsafe { SetConsoleActiveScreenBuffer(buffer.handle())? };
         self.active_buffer = buffer;
         Ok(())
     }
@@ -93,6 +71,12 @@ impl Terminal {
         }
         todo!()
     }
+    pub fn get_buffer(&self) -> ScreenBuffer {
+        self.active_buffer
+    }
+    pub fn input_handle(&self) -> HANDLE {
+        self.std_handles.input
+    }
 }
 
 impl Terminal {
@@ -100,7 +84,7 @@ impl Terminal {
         unsafe {
             let handle = self.active_buffer;
             let pos = COORD { X: x, Y: y };
-            SetConsoleCursorPosition(handle.0, pos)
+            SetConsoleCursorPosition(handle.handle(), pos)
         }
     }
     fn get_size(&self) -> Result<(usize, usize)> {
@@ -121,38 +105,84 @@ impl Terminal {
 }
 
 impl Terminal {
-    pub fn get_key(&self) -> Option<(Key, char)> {
+    pub fn poll_events(&mut self) -> Result<Option<Event>> {
         unsafe {
-            let handle = self.std_handles.input;
-            let mut events: u32 = 0;
-            //Gets the amount of Input Events
-            if GetNumberOfConsoleInputEvents(handle, core::ptr::addr_of_mut!(events)).is_err() {
-                return None;
-            };
-            if events > 0 {
-                let mut buffer: [INPUT_RECORD; 1] = std::mem::zeroed();
-                let mut read: u32 = 0;
-                if ReadConsoleInputW(handle, &mut buffer, core::ptr::addr_of_mut!(read)).is_err() {
-                    return None;
-                }
-                match buffer[0].EventType {
-                    IKEY_EVENT => {
-                        if buffer[0].Event.KeyEvent.bKeyDown.as_bool() {
-                            return Some((
-                                buffer[0].Event.KeyEvent.wVirtualKeyCode,
-                                char::from_u32(buffer[0].Event.KeyEvent.uChar.UnicodeChar.into())
-                                    .or(Some(' '))
-                                    .unwrap(),
-                            ));
-                        }
-                    }
-                    _ => return None,
-                }
+            let handle = self.input_handle();
+            let mut buffer: [INPUT_RECORD; 1] = [INPUT_RECORD::default()];
+            let mut read = 0;
+            ReadConsoleInputW(handle, &mut buffer, &mut read)?;
+            if read == 1 {
+                Ok(Some(Event::from_input(&buffer[0])))
+            } else {
+                Ok(None)
             }
-            return None;
         }
     }
 }
+
+enum Event {
+    KeyEvent {
+        keydown: bool,
+        repeat_counter: u16,
+        virt_scan_code: u16,
+        virt_key_code: u16,
+        control_keys: u32,
+        as_char: char,
+    },
+    MouseEvent {
+        pos: (usize, usize),
+        button_state: u32,
+        control_keys: u32,
+        event: u32,
+    },
+    ResizeEvent(usize, usize),
+    FocusEvent(bool),
+    MenüEvent(u32),
+}
+
+impl Event {
+    pub fn from_input(value: &INPUT_RECORD) -> Event {
+        match value.EventType {
+            1 => {
+                let event = unsafe { value.Event.KeyEvent };
+                Event::KeyEvent {
+                    keydown: event.bKeyDown.as_bool(),
+                    repeat_counter: event.wRepeatCount,
+                    virt_scan_code: event.wVirtualScanCode,
+                    virt_key_code: event.wVirtualKeyCode,
+                    control_keys: event.dwControlKeyState,
+                    as_char: unsafe { char::from_u32_unchecked(event.uChar.UnicodeChar as u32) },
+                }
+            }
+            2 => {
+                let event = unsafe { value.Event.MouseEvent };
+                Event::MouseEvent {
+                    pos: (
+                        event.dwMousePosition.X as usize,
+                        event.dwMousePosition.Y as usize,
+                    ),
+                    button_state: event.dwButtonState,
+                    control_keys: event.dwControlKeyState,
+                    event: event.dwEventFlags,
+                }
+            }
+            4 => {
+                let event = unsafe { value.Event.WindowBufferSizeEvent };
+                Event::ResizeEvent(event.dwSize.X as usize, event.dwSize.Y as usize)
+            }
+            8 => {
+                let event = unsafe { value.Event.MenuEvent };
+                Event::MenüEvent(event.dwCommandId)
+            }
+            16 => {
+                let event = unsafe { value.Event.FocusEvent };
+                Event::FocusEvent(event.bSetFocus.as_bool())
+            }
+            _ => panic!("Corrupt Event Record"),
+        }
+    }
+}
+
 pub struct TerminalStr {
     x: usize,
     y: usize,
@@ -201,99 +231,6 @@ impl Index<usize> for TerminalStr {
 impl IndexMut<usize> for TerminalStr {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.buf[index * self.x..(index + 1) * self.x]
-    }
-}
-
-pub struct StdHandles {
-    input: HANDLE,
-    output: ScreenBuffer,
-}
-
-#[derive(Clone, Copy)]
-pub struct ScreenBuffer {
-    handle: HANDLE,
-    attr: Attributes,
-}
-
-impl ScreenBuffer {
-    pub fn get_std_handles() -> Result<StdHandles> {
-        unsafe {
-            let input = GetStdHandle(STD_INPUT_HANDLE)?;
-            let output = ScreenBuffer(GetStdHandle(STD_OUTPUT_HANDLE)?);
-            Ok(StdHandles {
-                input: input,
-                output: output,
-            })
-        }
-    }
-    pub fn new_buffer() -> Result<ScreenBuffer> {
-        unsafe {
-            CreateConsoleScreenBuffer(0, 0, None, CONSOLE_TEXTMODE_BUFFER, None).map(ScreenBuffer)
-        }
-    }
-    pub fn get_size(&self) -> Result<(usize, usize)> {
-        let size: (usize, usize) = {
-            #[cfg(not(feature = "debug"))]
-            {
-                let mut buf: CONSOLE_SCREEN_BUFFER_INFO = CONSOLE_SCREEN_BUFFER_INFO::default();
-                unsafe {
-                    GetConsoleScreenBufferInfo(
-                        self.0,
-                        &mut buf as *mut CONSOLE_SCREEN_BUFFER_INFO,
-                    )?;
-                }
-                (buf.dwSize.X as usize, buf.dwSize.Y as usize)
-            }
-            #[cfg(feature = "debug")]
-            {
-                (75, 15)
-            }
-        };
-        Ok(size)
-    }
-    pub fn handle(&self) -> HANDLE {
-        self.0
-    }
-    pub fn write_buffer(&mut self, cords: (usize, usize), buffer: TerminalStr) -> Result<()> {
-        let mut region = SMALL_RECT {
-            Left: cords.0 as i16,
-            Top: cords.1 as i16,
-            Right: (cords.0 + buffer.x) as i16,
-            Bottom: (cords.1 + buffer.y) as i16,
-        };
-        unsafe {
-            WriteConsoleOutputW(
-                self.0,
-                buffer.buf.as_ptr(),
-                COORD {
-                    X: buffer.x as i16,
-                    Y: buffer.y as i16,
-                },
-                COORD {
-                    X: cords.0 as i16,
-                    Y: cords.1 as i16,
-                },
-                &mut region as *mut SMALL_RECT,
-            )
-        }
-    }
-    pub fn write_lin(&mut self, cords: (usize, usize), buffer: &[u16]) -> Result<()> {
-        let mut written: u32 = 0;
-        unsafe {
-            WriteConsoleOutputCharacterW(
-                self.0,
-                buffer,
-                COORD {
-                    X: cords.0 as i16,
-                    Y: cords.1 as i16,
-                },
-                &mut written as *mut u32,
-            )
-        }
-    }
-    pub fn blank(&mut self) -> Result<()> {
-        let size = self.get_size()?;
-        self.write_buffer((0, 0), TerminalStr::new(size.0, size.1, None))
     }
 }
 
