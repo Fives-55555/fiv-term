@@ -18,6 +18,9 @@ where
             buf: [MaybeUninit::uninit(); T::BUF_SIZE],
         }
     }
+    pub fn as_slice(&self, len: usize) -> &[u8] {
+        unsafe{&*(&self.buf[..len] as *const [MaybeUninit<u8>] as *const [u8])};
+    }
     pub fn as_str(&self, len: usize) -> &str {
         let slice: &[u8] =
             unsafe { &*(&self.buf[..len] as *const [MaybeUninit<u8>] as *const [u8]) };
