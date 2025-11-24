@@ -1,13 +1,18 @@
-use std::iter::FusedIterator;
-use std::ops::BitAnd;
+#![feature(int_format_into)]
+#![feature(generic_const_exprs)]
+
+mod stuff;
+
+pub use crate::stuff::{FastForwardFormat, NumberBuffer};
 
 #[cfg(target_os = "linux")]
 mod linux;
-
+/*
 #[cfg(target_os = "windows")]
 mod windows;
 
 mod terminal;
+mod stuff;
 
 mod commands;
 mod loadbar;
@@ -22,7 +27,7 @@ pub use crate::color::{Attributes, Color};
 pub use crate::page::{Content, Page, PageUtils};
 
 pub use crate::loadbar::Loadbar;
-
+*/
 // pub trait LenLinesAdd {
 //     fn lenlines(&self, len: usize) -> LenLines<'_>;
 // }
@@ -155,14 +160,16 @@ pub struct Terminal {
    // Two Dim Render 
 }
 
-
 #[cfg(not(feature = "ter_test"))]
 #[test]
-fn try_vis() -> Result<()> {
-    use crate::terminal::Terminal;
+fn try_vis() {
+    use crate::stuff::{FastForwardFormat, NumberBuffer};
+    use std::mem::MaybeUninit;
 
-    let terminal = Terminal::new();
-    Ok(())
+    let mut buf = NumberBuffer::new();
+    let number: u64 = 14647671935;
+    let len = number.forward_format(&mut buf);
+    eprintln!("{}", buf.as_str(len));
 }
 
 // -----------------------------
@@ -175,23 +182,21 @@ fn try_vis() -> Result<()> {
 // |                           |
 // -----------------------------
 
-pub trait Bitfield {
-    fn has(&self, bit: &Self)->bool {
-        (self & bit) != 0
-    }
-}
-
-pub(crate) enum Footer {
+pub(crate) enum _Footer {
     Basic = 1,
     Loadbar = 2,
     Keys = 4,
 }
 
-impl Footer {
+impl _Footer {
     // Calculates the Area of the Loadbar (including the Delimiter('|')?)
-    pub const fn calc_loadbar(size: (usize, usize)) -> (usize, usize) {
+    pub const fn _calc_loadbar(size: (usize, usize)) -> (usize, usize) {
         let loadbar_size = size.0 / 4;
         let loadbar_pos = size.0 - loadbar_size - 1;
         (loadbar_pos, loadbar_size)
     }
+}
+
+pub trait TerminalTrait {
+    type Result<V>;
 }
