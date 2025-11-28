@@ -5,12 +5,17 @@ mod stuff;
 
 pub use crate::stuff::{FastForwardFormat, NumberBuffer};
 
-#[cfg(target_os = "linux")]
-mod linux;
-/*
-#[cfg(target_os = "windows")]
-mod windows;
+mod tests;
 
+//#[cfg(target_os = "linux")]
+//mod linux;
+
+//#[cfg(target_os = "windows")]
+//mod windows;
+
+//mod virtkeys;
+
+/*
 mod terminal;
 mod stuff;
 
@@ -160,16 +165,9 @@ pub struct Terminal {
    // Two Dim Render 
 }
 
-#[cfg(not(feature = "ter_test"))]
+#[cfg(feature = "ter_test")]
 #[test]
 fn try_vis() {
-    use crate::stuff::{FastForwardFormat, NumberBuffer};
-    use std::mem::MaybeUninit;
-
-    let mut buf = NumberBuffer::new();
-    let number: u64 = 14647671935;
-    let len = number.forward_format(&mut buf);
-    eprintln!("{}", buf.as_str(len));
 }
 
 // -----------------------------

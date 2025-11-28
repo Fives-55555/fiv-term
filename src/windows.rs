@@ -1,6 +1,4 @@
-use core::fmt::NumBuffer;
-use std::io::Result;
-
+/*
 use windows::{
     Win32::{
         Foundation::HANDLE,
@@ -112,7 +110,7 @@ pub struct StdHandles {
     input: HANDLE,
     output: HANDLE,
 }
-
+*/
 pub struct WindowsTerminal;
 
 pub const ESC_SEQ: u8 = 0x1b;
