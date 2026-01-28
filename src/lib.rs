@@ -1,19 +1,32 @@
 #![feature(int_format_into)]
+#![feature(allocator_api)]
+#![feature(maybe_uninit_array_assume_init)]
+#![feature(trait_alias)]
+#![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
+#![feature(c_variadic)]
+#![feature(ptr_as_ref_unchecked)]
+#![feature(str_as_str)]
+
+use crate::stdio::StdIo;
 
 mod stuff;
 
-pub use crate::stuff::{FastForwardFormat, NumberBuffer};
+pub mod stdio;
 
-mod tests;
+pub mod virtseq;
 
-//#[cfg(target_os = "linux")]
-//mod linux;
+// pub use crate::stuff::{FastForwardFormat, NumberBuffer};
 
-//#[cfg(target_os = "windows")]
-//mod windows;
+// mod tests;
 
-//mod virtkeys;
+// #[cfg(target_os = "linux")]
+// mod linux;
+
+#[cfg(target_os = "windows")]
+mod windows;
+
+// pub mod virtkeys;
 
 /*
 mod terminal;
@@ -161,14 +174,50 @@ pub use crate::loadbar::Loadbar;
 //     }
 // }
 
-pub struct Terminal {
-   // Two Dim Render 
+pub struct Terminal<T: StdIo> {
+    dynamic: bool,
+    input: InputState,
+    stdio: T,
+}
+
+enum InputState {
+    Basic,
+    Keyboard,
+    Text,
+}
+
+/// The Requested Action for the Terminal
+enum TerminalAction {
+    Quit,
+    Back,
+    ChangePage,
+}
+
+impl<T: StdIo> Terminal<T> {
+    pub fn new() -> Terminal<T> {
+        Terminal {
+            dynamic: false,
+            input: InputState::Basic,
+            stdio: T::default(),
+        }
+    }
+    /// This dequeues any input and consumes it
+    pub fn update(&self) {
+        let mut buf = [0; 16];
+        loop {
+            let read = self.stdio.read_in(&mut buf).unwrap();
+            if read == 0 {
+                break;
+            }
+        }
+    }
+    pub fn render(&self) {}
+    pub fn render_loop() {}
 }
 
 #[cfg(feature = "ter_test")]
 #[test]
-fn try_vis() {
-}
+fn try_vis() {}
 
 // -----------------------------
 // |                           |

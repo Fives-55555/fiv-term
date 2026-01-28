@@ -1,13 +1,19 @@
-use std::{io::Result, os::fd::OwnedFd};
+use std::{
+    io::{Result, Stderr, Stdin, Stdout, stderr, stdin, stdout},
+    os::fd::{AsRawFd, OwnedFd},
+    sync::LazyLock,
+};
 
-pub struct StdHandles {
-    input: OwnedFd,
-    output: OwnedFd,
-    error: OwnedFd,
+use crate::{TerminalTrait, virtkeys::VirtualSeq};
+
+pub struct Terminal {}
+
+impl TerminalTrait for Terminal {
+    type Result<V> = Result<V>;
 }
 
-impl StdHandles {
-    pub fn new() -> Result<StdHandles> {
-        Ok(StdHandles { input: stdin })
+impl VirtualSeq for Terminal {
+    fn enable(&self) -> <Self as crate::TerminalTrait>::Result<()> {
+        Ok(())
     }
 }

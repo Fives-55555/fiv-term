@@ -5,8 +5,8 @@ use std::{
 };
 
 use windows::{
-    core::Result,
     Win32::System::Console::{WriteConsoleA, WriteConsoleW},
+    core::Result,
 };
 
 use crate::terminal::{ScreenBuffer, Terminal, TerminalStr};

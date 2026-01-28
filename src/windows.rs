@@ -1,3 +1,20 @@
+use windows::Win32::{
+    Foundation::HANDLE,
+    System::Console::{
+        CONSOLE_MODE, ENABLE_VIRTUAL_TERMINAL_PROCESSING, GetConsoleMode, GetStdHandle,
+        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
+    },
+};
+
+use crate::{
+    FastForwardFormat, NumberBuffer, TerminalTrait,
+    virtkeys::{
+        CursorBlink, CursorPosition, CursorShape, CursorShapes, CursorVisibility, ReverseIndex,
+        Scrolling, StoreCursor, TextMod, VirtualSeq, VirtualSequenceBuffer,
+    },
+};
+use std::io::Result;
+
 /*
 use windows::{
     Win32::{
@@ -111,9 +128,25 @@ pub struct StdHandles {
     output: HANDLE,
 }
 */
-pub struct WindowsTerminal;
+pub struct WindowsTerminal {
+    input_handle: HANDLE,
+    output_handle: HANDLE,
+}
 
-pub const ESC_SEQ: u8 = 0x1b;
+impl WindowsTerminal {
+    pub fn new() -> <WindowsTerminal as TerminalTrait>::Result<WindowsTerminal> {
+        unsafe {
+            let input = GetStdHandle(STD_INPUT_HANDLE)?;
+            let output = GetStdHandle(STD_OUTPUT_HANDLE)?;
+            Ok(WindowsTerminal {
+                input_handle: input,
+                output_handle: output,
+            })
+        }
+    }
+}
+
+const ESC_SEQ: u8 = 0x1b;
 
 impl TerminalTrait for WindowsTerminal {
     type Result<V> = Result<V>;
@@ -121,32 +154,359 @@ impl TerminalTrait for WindowsTerminal {
 
 // See https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences#example
 impl VirtualSeq for WindowsTerminal {
-    fn enable(&self) -> Result<()> {}
+    fn enable(&self) -> Result<()> {
+        let mut mode = CONSOLE_MODE::default();
+        unsafe { GetConsoleMode(self.output_handle, &mut mode) }?;
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        unsafe { SetConsoleMode(self.output_handle, mode) }?;
+        Ok(())
+    }
 }
 
 impl ReverseIndex for WindowsTerminal {
-    fn ri(&self) -> &[u8] {
-        &[ESC_SEQ, b'M']
+    fn ri(&self, buf: &mut VirtualSequenceBuffer) {
+        // FIXME
+        assert!(buf.cap() >= 2);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'm';
+        buf.len += 1;
     }
 }
 
 impl StoreCursor for WindowsTerminal {
-    fn decsc(&self) -> &[u8] {
-        &[ESC_SEQ, b'7']
+    fn decsc(&self, buf: &mut VirtualSequenceBuffer) {
+        // FIXME
+        assert!(buf.cap() >= 2);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'7';
+        buf.len += 1;
     }
-    fn decsr(&self) -> &[u8] {
-        &[ESC_SEQ, b'8']
+    fn decsr(&self, buf: &mut VirtualSequenceBuffer) {
+        // FIXME
+        assert!(buf.cap() >= 2);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'8';
+        buf.len += 1;
     }
 }
 
 impl CursorPosition for WindowsTerminal {
-    fn cuu(&self, lines: u16) -> VirtualSequence<8> {
-        let whole = VirtualSequence {
-            buf: [ESC_SEQ, b'[', 0, 0, 0, 0, 0, 0],
-            len: 0
-        };
-        let mut buf: NumBuffer<u16> = NumBuffer;
-        let num = lines.format_into(&mut buf);
-        whole
+    fn cuu(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(lines <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'A';
+        buf.len += 1;
+    }
+    fn cud(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(lines <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'B';
+        buf.len += 1;
+    }
+    fn cuf(&self, buf: &mut VirtualSequenceBuffer, chars: u16) {
+        assert!(chars <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = chars.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'C';
+        buf.len += 1;
+    }
+    fn cub(&self, buf: &mut VirtualSequenceBuffer, chars: u16) {
+        assert!(chars <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = chars.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'D';
+        buf.len += 1;
+    }
+    fn cnl(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(lines <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'E';
+        buf.len += 1;
+    }
+    fn cpl(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(lines <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'F';
+        buf.len += 1;
+    }
+    fn cha(&self, buf: &mut VirtualSequenceBuffer, x: u16) {
+        assert!(x <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = x.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'G';
+        buf.len += 1;
+    }
+    fn vpa(&self, buf: &mut VirtualSequenceBuffer, y: u16) {
+        assert!(y <= 32_767);
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = y.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'G';
+        buf.len += 1;
+    }
+    fn cup(&self, buf: &mut VirtualSequenceBuffer, x: u16, y: u16) {
+        assert!(x <= 32_767);
+        assert!(y <= 32_767);
+        assert!(buf.cap() >= 14);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = y.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b';';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = x.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'H';
+        buf.len += 1;
+    }
+    fn hvp(&self, buf: &mut VirtualSequenceBuffer, x: u16, y: u16) {
+        assert!(x <= 32_767);
+        assert!(y <= 32_767);
+        assert!(buf.cap() >= 14);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = y.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b';';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = x.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'f';
+        buf.len += 1;
+    }
+}
+
+impl CursorBlink for WindowsTerminal {
+    fn att160(&self, buf: &mut VirtualSequenceBuffer, state: bool) {
+        assert!(buf.cap() >= 6);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        buf.buf[buf.len] = b'?';
+        buf.len += 1;
+        buf.buf[buf.len] = b'1';
+        buf.len += 1;
+        buf.buf[buf.len] = b'2';
+        buf.len += 1;
+        buf.buf[buf.len] = if state { b'h' } else { b'l' };
+        buf.len += 1;
+    }
+}
+
+impl CursorVisibility for WindowsTerminal {
+    fn dectcem(&self, buf: &mut VirtualSequenceBuffer, state: bool) {
+        assert!(buf.cap() >= 6);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        buf.buf[buf.len] = b'?';
+        buf.len += 1;
+        buf.buf[buf.len] = b'2';
+        buf.len += 1;
+        buf.buf[buf.len] = b'5';
+        buf.len += 1;
+        buf.buf[buf.len] = if state { b'h' } else { b'l' };
+        buf.len += 1;
+    }
+}
+
+impl CursorShape for WindowsTerminal {
+    fn decscusr(&self, buf: &mut VirtualSequenceBuffer, shape: CursorShapes) {
+        assert!(buf.cap() >= 6);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        buf.buf[buf.len] = shape as u8;
+        buf.len += 1;
+        buf.buf[buf.len] = b'S';
+        buf.len += 1;
+        buf.buf[buf.len] = b'P';
+        buf.len += 1;
+        buf.buf[buf.len] = b'q';
+        buf.len += 1;
+    }
+}
+
+impl Scrolling for WindowsTerminal {
+    fn su(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(lines <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'S';
+        buf.len += 1;
+    }
+    fn sd(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(lines <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'T';
+        buf.len += 1;
+    }
+}
+
+impl TextMod for WindowsTerminal {
+    fn ich(&self, buf: &mut VirtualSequenceBuffer, chars: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(chars <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = chars.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'@';
+        buf.len += 1;
+    }
+    fn dch(&self, buf: &mut VirtualSequenceBuffer, chars: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(chars <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = chars.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'P';
+        buf.len += 1;
+    }
+    fn ech(&self, buf: &mut VirtualSequenceBuffer, chars: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(chars <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = chars.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'X';
+        buf.len += 1;
+    }
+    fn il(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(lines <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'L';
+        buf.len += 1;
+    }
+    fn dl(&self, buf: &mut VirtualSequenceBuffer, lines: u16) {
+        assert!(buf.cap() >= 8);
+        assert!(lines <= 32_767);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        let mut num_buf: NumberBuffer<u16> = NumberBuffer::from(&mut buf.buf[buf.len..]);
+        let num = lines.forward_format(&mut num_buf);
+        buf.len += num;
+        buf.buf[buf.len] = b'M';
+        buf.len += 1;
+    }
+    fn ed(&self, buf: &mut VirtualSequenceBuffer, mode: crate::virtkeys::EraseMode) {
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        buf.buf[buf.len] = mode as u8;
+        buf.len += 1;
+        buf.buf[buf.len] = b'J';
+        buf.len += 1;
+    }
+    fn el(&self, buf: &mut VirtualSequenceBuffer, mode: crate::virtkeys::EraseMode) {
+        assert!(buf.cap() >= 8);
+        buf.buf[buf.len] = ESC_SEQ;
+        buf.len += 1;
+        buf.buf[buf.len] = b'[';
+        buf.len += 1;
+        buf.buf[buf.len] = mode as u8;
+        buf.len += 1;
+        buf.buf[buf.len] = b'K';
+        buf.len += 1;
     }
 }

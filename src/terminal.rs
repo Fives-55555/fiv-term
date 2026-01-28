@@ -1,4 +1,4 @@
-use std::ops::{Index, IndexMut};
+/*use std::ops::{Index, IndexMut};
 
 use fiv_log::{log, ERROR};
 #[cfg(not(feature = "debug"))]
@@ -322,3 +322,4 @@ fn test() {
 
 //https://learn.microsoft.com/de-de/windows/win32/inputdev/virtual-key-codes
 pub type Key = u16;
+*/
