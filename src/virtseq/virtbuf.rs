@@ -1,17 +1,29 @@
-use crate::TerminalTrait;
+use crate::{
+    TerminalTrait,
+    stuff::{FastForwardFormat, NumberBuffer},
+};
 
-pub struct VirtualSequenceBuffer {
+pub struct VirtSeqBuf {
     pub buf: [u8; Self::BUFFER_SIZE],
+    pub idx: usize,
     pub cap: usize,
 }
 
-impl VirtualSequenceBuffer {
+impl VirtSeqBuf {
     pub const BUFFER_SIZE: usize = 128;
     pub const fn new(&self) -> Self {
-        VirtualSequenceBuffer {
+        VirtSeqBuf {
             buf: [0; Self::BUFFER_SIZE],
+            idx: 0,
             cap: Self::BUFFER_SIZE,
         }
+    }
+    pub fn format_num(&mut self, num: u16) -> Result<(), ()> {
+        let mut buf = NumberBuffer::try_from(&mut self.buf[self.idx..])?;
+        let x = num.forward_format(&mut buf);
+        self.cap -= x;
+        self.idx += x;
+        Ok(())
     }
 }
 
@@ -28,77 +40,77 @@ pub trait VirtualSeq: TerminalTrait {
 
 pub trait ReverseIndex: VirtualSeq {
     // Move the Cursor one line up.
-    fn ri(&self, buf: &mut VirtualSequenceBuffer);
+    fn ri(&self, buf: &mut VirtSeqBuf);
 }
 
 pub trait StoreCursor: VirtualSeq {
     // Stores the current cursor osition to memory.
-    fn decsc(&self, buf: &mut VirtualSequenceBuffer);
+    fn decsc(&self, buf: &mut VirtSeqBuf);
     // Restores the saved position. Requires previous store.
-    fn decsr(&self, buf: &mut VirtualSequenceBuffer);
+    fn decsr(&self, buf: &mut VirtSeqBuf);
 }
 
 pub trait CursorPosition: VirtualSeq {
     /// Moves cursor up by <lines>.
     /// <lines> cant be larger then 32.767
-    fn cuu(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn cuu(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Moves cursor down by <lines>.
     /// <lines> cant be larger then 32.767
-    fn cud(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn cud(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Moves cursor forward
     /// <lines> cant be larger then 32.767
-    fn cuf(&self, buf: &mut VirtualSequenceBuffer, chars: u16);
+    fn cuf(&self, buf: &mut VirtSeqBuf, chars: u16);
     /// Moves cursor backward
     /// <lines> cant be larger then 32.767
-    fn cub(&self, buf: &mut VirtualSequenceBuffer, chars: u16);
+    fn cub(&self, buf: &mut VirtSeqBuf, chars: u16);
     /// Moves up by <lines> and to the begining of this line
     /// <lines> cant be larger then 32.767
-    fn cnl(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn cnl(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Moves up by <lines> and to the begining of this line
     /// <lines> cant be larger then 32.767
-    fn cpl(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn cpl(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Moves to the absolute horizontal position. Aka. it moves to charater <y>
     /// <y> cant be larger then 32.767
-    fn cha(&self, buf: &mut VirtualSequenceBuffer, x: u16);
+    fn cha(&self, buf: &mut VirtSeqBuf, x: u16);
     /// Moves to the absolute vertical position. Aka. it moves to line <y>
     /// <y> cant be larger then 32.767
-    fn vpa(&self, buf: &mut VirtualSequenceBuffer, y: u16);
+    fn vpa(&self, buf: &mut VirtSeqBuf, y: u16);
     /// VT100-Standart. Moves the Cursor to <x> and <y>.
     /// <x>, <y> cant be larger then 32.767
-    fn cup(&self, buf: &mut VirtualSequenceBuffer, x: u16, y: u16);
+    fn cup(&self, buf: &mut VirtSeqBuf, x: u16, y: u16);
     /// This is useless. ISO-Standart. Same as CUP.
     /// <x>, <y> cant be larger then 32.767
-    fn hvp(&self, buf: &mut VirtualSequenceBuffer, x: u16, y: u16);
+    fn hvp(&self, buf: &mut VirtSeqBuf, x: u16, y: u16);
 }
 
 /// Simulates Ansi.sys Cursor Save/Load Operations
 pub trait WinAnsiEmmulation: VirtualSeq {
     /// Stores the Cursor Position
-    fn ansisyssc(&self, buf: &mut VirtualSequenceBuffer);
+    fn ansisyssc(&self, buf: &mut VirtSeqBuf);
     /// Loads the Cursor Position
-    fn ansisysrc(&self, buf: &mut VirtualSequenceBuffer);
+    fn ansisysrc(&self, buf: &mut VirtSeqBuf);
 }
 
 /// Makes the Cursor Blink
 pub trait CursorBlink: VirtualSeq {
-    fn att160(&self, buf: &mut VirtualSequenceBuffer, state: bool);
+    fn att160(&self, buf: &mut VirtSeqBuf, state: bool);
 }
 
 /// Changes the Visibility of the cursor
 pub trait CursorVisibility: VirtualSeq {
-    fn dectcem(&self, buf: &mut VirtualSequenceBuffer, state: bool);
+    fn dectcem(&self, buf: &mut VirtSeqBuf, state: bool);
 }
 
 /// Changes the Cursor Shape
 pub trait CursorShape: VirtualSeq {
-    fn decscusr(&self, buf: &mut VirtualSequenceBuffer, shape: CursorShapes);
+    fn decscusr(&self, buf: &mut VirtSeqBuf, shape: CursorShapes);
 }
 
 pub trait Scrolling {
     /// Scrolls up by <lines> lines. IMPORTANT: The Viewport moves down.
-    fn su(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn su(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Scrolls down by <lines> lines. IMPORTANT: The Viewport moves up.
-    fn sd(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn sd(&self, buf: &mut VirtSeqBuf, lines: u16);
 }
 
 // FIXME
@@ -115,19 +127,19 @@ pub enum CursorShapes {
 
 pub trait TextMod {
     /// Inserts <chars> spaces at the cursor position
-    fn ich(&self, buf: &mut VirtualSequenceBuffer, chars: u16);
+    fn ich(&self, buf: &mut VirtSeqBuf, chars: u16);
     /// Delets <chars> characters and shifts the other chars to the left
-    fn dch(&self, buf: &mut VirtualSequenceBuffer, chars: u16);
+    fn dch(&self, buf: &mut VirtSeqBuf, chars: u16);
     /// Replaces <chars> characters with spaces
-    fn ech(&self, buf: &mut VirtualSequenceBuffer, chars: u16);
+    fn ech(&self, buf: &mut VirtSeqBuf, chars: u16);
     /// Inserts <lines> lines over the cursor
-    fn il(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn il(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Removes <lines> lines from the cursor line on
-    fn dl(&self, buf: &mut VirtualSequenceBuffer, lines: u16);
+    fn dl(&self, buf: &mut VirtSeqBuf, lines: u16);
     /// Erase the display based on the mode
-    fn ed(&self, buf: &mut VirtualSequenceBuffer, mode: EraseMode);
+    fn ed(&self, buf: &mut VirtSeqBuf, mode: EraseMode);
     /// Erase the line based on the mode
-    fn el(&self, buf: &mut VirtualSequenceBuffer, mode: EraseMode);
+    fn el(&self, buf: &mut VirtSeqBuf, mode: EraseMode);
 }
 
 #[repr(u8)]
@@ -138,7 +150,7 @@ pub enum EraseMode {
 }
 
 pub trait ConsoleFormat {
-    fn sgr(&self, buf: &mut VirtualSequenceBuffer, fmt: [ConsoleFmtMode; 16]);
+    fn sgr(&self, buf: &mut VirtSeqBuf, fmt: [ConsoleFmtMode; 16]);
 }
 
 #[repr(u8)]

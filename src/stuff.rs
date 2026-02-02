@@ -28,14 +28,17 @@ where
     }
 }
 
-impl<F: NumBufferTrait> From<&mut [u8]> for NumberBuffer<F>
+impl<F: NumBufferTrait> TryFrom<&mut [u8]> for NumberBuffer<F>
 where
     [(); F::BUF_SIZE]:,
 {
-    fn from(value: &mut [u8]) -> Self {
-        debug_assert!(value.len() > F::BUF_SIZE);
+    type Error = ();
+    fn try_from(value: &mut [u8]) -> Result<Self, Self::Error> {
+        if value.len() < F::BUF_SIZE {
+            return Err(());
+        }
         let buf: &mut [u8; F::BUF_SIZE] = value.try_into().expect("Debug Assert Failed");
-        NumberBuffer { buf: *buf }
+        Ok(NumberBuffer { buf: *buf })
     }
 }
 
@@ -242,20 +245,22 @@ pub trait SeqBuf {
     fn get_first_to_t<'ret, T>(self, len: usize) -> Option<&'ret [T]>;
 }
 
-impl SeqBuf for &[u8] {
-    fn get_first<'ret>(mut self, len: usize) -> Option<&'ret [u8]> {
+impl SeqBuf for &mut &[u8] {
+    fn get_first<'ret>(self, len: usize) -> Option<&'ret [u8]> {
         if self.len() >= len {
-            self = &self[len..];
-            Some(unsafe { slice::from_raw_parts(self.as_ptr(), len) })
+            let ptr = self.as_ptr();
+            *self = &self[len..];
+            Some(unsafe { slice::from_raw_parts(ptr, len) })
         } else {
             None
         }
     }
-    fn get_first_to_t<'ret, T>(mut self, len: usize) -> Option<&'ret [T]> {
+    fn get_first_to_t<'ret, T>(self, len: usize) -> Option<&'ret [T]> {
         let real_len = len * size_of::<T>();
         if self.len() >= real_len {
-            self = &self[real_len..];
-            Some(unsafe { slice::from_raw_parts(self.as_ptr() as *const T, len) })
+            let ptr = self.as_ptr();
+            *self = &self[real_len..];
+            Some(unsafe { slice::from_raw_parts(ptr as *const T, len) })
         } else {
             None
         }

@@ -7,6 +7,8 @@
 #![feature(c_variadic)]
 #![feature(ptr_as_ref_unchecked)]
 #![feature(str_as_str)]
+#![feature(ptr_mask)]
+#![feature(const_trait_impl)]
 
 use crate::stdio::StdIo;
 
@@ -175,7 +177,7 @@ pub use crate::loadbar::Loadbar;
 // }
 
 pub struct Terminal<T: StdIo> {
-    dynamic: bool,
+    dynamic_view: bool,
     input: InputState,
     stdio: T,
 }
@@ -196,7 +198,7 @@ enum TerminalAction {
 impl<T: StdIo> Terminal<T> {
     pub fn new() -> Terminal<T> {
         Terminal {
-            dynamic: false,
+            dynamic_view: false,
             input: InputState::Basic,
             stdio: T::default(),
         }
