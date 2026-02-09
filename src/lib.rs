@@ -1,18 +1,15 @@
 #![feature(int_format_into)]
-#![feature(allocator_api)]
+#![feature(ptr_mask)]
 #![feature(maybe_uninit_array_assume_init)]
-#![feature(trait_alias)]
+#![feature(str_as_str)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-#![feature(c_variadic)]
-#![feature(ptr_as_ref_unchecked)]
-#![feature(str_as_str)]
-#![feature(ptr_mask)]
-#![feature(const_trait_impl)]
 
 use crate::stdio::StdIo;
 
 mod stuff;
+
+pub use stuff::SeqBuf;
 
 pub mod stdio;
 

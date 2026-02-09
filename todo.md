@@ -1,5 +1,13 @@
 # ToDo
 
+## [ ] Multiplatform
+### - [ ] Linux TermInfo
+#### - [ ] Entry Parsing
+#### - [ ] Terminal Config
+### - [ ] Windows const Term
+
+## [ ] Page Refactoring
+
 ## [x] Content
 ### - [x] len
 

@@ -1,10 +1,22 @@
-use std::{error::Error, ffi::CStr, fmt::Display, fs::OpenOptions, io::Read};
+use std::{
+    env,
+    error::Error,
+    ffi::CStr,
+    fmt::Display,
+    fs::OpenOptions,
+    io::Read,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 
-use crate::stuff::SeqBuf;
+use crate::SeqBuf;
+
+use super::{BOOL_NAMES, INT_NAMES, STRING_NAMES};
 
 const MAXENTRYSIZE: usize = 4096;
 const MAXEXTENTRYSIZE: usize = 32768;
 
+#[derive(Debug)]
 pub struct TermInfo<'file> {
     file: Box<[u8]>,
     // FIXME Overthink this TM
@@ -52,20 +64,15 @@ pub enum ParseError {
     NoExtStrTable,
     InvalidExtStrIdx,
     InvalidExtCStr,
+    InvalidExtName,
     InvalidExtStrTable,
-}
-
-impl Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
 }
 
 impl Error for ParseError {}
 
 impl TermInfo<'_> {
     pub const PATH: &'static str = "/usr/share/terminfo/";
-    pub fn new<'a, 'b>(path: &'a str) -> Result<TermInfo<'b>, ParseError> {
+    pub fn new<'a, 'b, P: AsRef<Path>>(path: P) -> Result<TermInfo<'b>, ParseError> {
         // FIXME Use a better Reader
         let mut file = Vec::new();
         _ = OpenOptions::new()
@@ -75,8 +82,7 @@ impl TermInfo<'_> {
             .read_to_end(&mut file)
             .unwrap();
 
-        let file = file.into_boxed_slice();
-        let mut file_ref = file.as_slice();
+        let mut file_ref = SeqBuf::new(file.into_boxed_slice());
 
         let header = match file_ref.get_first_to_t::<Header>(1) {
             Some(header) => &header[0],
@@ -105,7 +111,7 @@ impl TermInfo<'_> {
 
         let bools = TermInfoBool::parse::<false>(&mut file_ref, header.bool_count)?;
 
-        if file_ref.as_ptr().mask(1) as usize != 0
+        if file_ref.base().mask(1) as usize != 0
             && file_ref
                 .get_first(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
@@ -123,23 +129,51 @@ impl TermInfo<'_> {
             header.str_table_size as usize,
         )?;
 
-        let ext_format = if !file_ref.is_empty() {
+        let ext_format = if file_ref.len() != 0 {
             Some(TermInfoExt::parse(&mut file_ref, header.version)?)
         } else {
             None
         };
 
-        return Ok(TermInfo {
-            file,
-            names,
-            bools,
-            ints,
-            strings,
-            ext_format,
-        });
+        match file_ref.end() {
+            Some(file) => Ok(TermInfo {
+                file,
+                names,
+                bools,
+                ints,
+                strings,
+                ext_format,
+            }),
+            None => Err(ParseError::FileNotEmpty),
+        }
+    }
+    pub fn from_term<'entry>() -> Result<TermInfo<'entry>, ParseError> {
+        let mut path = PathBuf::from(Self::PATH);
+        let term = match env::var_os("TERM") {
+            Some(os_str) => os_str,
+            None => return Err(ParseError::Debug),
+        };
+        let dir = match term.as_bytes().first() {
+            Some(char) => match char::from_u32(*char as u32) {
+                Some(char) => format!("{char}"),
+                None => return Err(ParseError::Debug),
+            },
+            None => return Err(ParseError::Debug),
+        };
+        path.push(dir);
+        path.push(term);
+        TermInfo::new(path)
+    }
+    pub fn get_str(&self, idx: usize) -> Option<&TermInfoString> {
+        if idx < self.strings.len() {
+            Some(&self.strings[idx])
+        } else {
+            None
+        }
     }
 }
 
+#[derive(Debug)]
 pub struct TermInfoExt<'file> {
     name_table: Vec<TermInfoString<'file>>,
     bools: &'file [TermInfoBool],
@@ -149,10 +183,10 @@ pub struct TermInfoExt<'file> {
 
 impl TermInfoExt<'_> {
     fn parse<'buf, 'file>(
-        buf: &mut &'buf [u8],
+        buf: &mut SeqBuf,
         version: TermInfoVersion,
     ) -> Result<TermInfoExt<'file>, ParseError> {
-        if buf.as_ptr().mask(1) as usize != 0
+        if buf.base().mask(1) as usize != 0
             && buf
                 .get_first(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
@@ -176,7 +210,7 @@ impl TermInfoExt<'_> {
 
         let bools = TermInfoBool::parse::<true>(buf, ext_header.bool_count)?;
 
-        if buf.as_ptr().mask(1) as usize != 0
+        if buf.base().mask(1) as usize != 0
             && buf
                 .get_first(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
@@ -198,16 +232,35 @@ impl TermInfoExt<'_> {
             ext_header.str_table_size as usize,
         )?;
 
-        if !buf.is_empty() {
-            return Err(ParseError::FileNotEmpty);
-        }
-
         return Ok(TermInfoExt {
             name_table,
             bools,
             ints,
             str_table,
         });
+    }
+    pub fn get_bool_name(&self, idx: usize) -> Option<&TermInfoString<'_>> {
+        if idx < self.bools.len() {
+            Some(&self.name_table[idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn get_int_name(&self, idx: usize) -> Option<&TermInfoString<'_>> {
+        if idx < self.ints.len() {
+            Some(&self.name_table[idx])
+        } else {
+            None
+        }
+    }
+
+    pub fn get_str_name(&self, idx: usize) -> Option<&TermInfoString<'_>> {
+        if idx < self.str_table.len() {
+            Some(&self.name_table[idx + self.bools.len() + self.ints.len()])
+        } else {
+            None
+        }
     }
 }
 
@@ -287,7 +340,7 @@ pub enum FormatnInts<'file> {
 
 impl FormatnInts<'_> {
     fn parse<'file, const EXT: bool>(
-        buf: &mut &[u8],
+        buf: &mut SeqBuf,
         count: i16,
         version: TermInfoVersion,
     ) -> Result<FormatnInts<'file>, ParseError> {
@@ -341,17 +394,25 @@ impl FormatnInts<'_> {
             }
         })
     }
+    pub fn len(&self) -> usize {
+        match self {
+            FormatnInts::Legacy(ints) => ints.len(),
+            FormatnInts::Extended(ints) => ints.len(),
+        }
+    }
 }
 
+#[derive(Debug)]
 pub enum TermInfoString<'file> {
     There(&'file [u8]),
+    Name(&'file str),
     NotImpl,
     IdkCanceled,
 }
 
 impl TermInfoString<'_> {
     fn parse<'file, const EXT: bool>(
-        buf: &mut &[u8],
+        buf: &mut SeqBuf,
         str_count: usize,
         name_count: Option<usize>,
         str_table_size: usize,
@@ -506,7 +567,6 @@ impl TermInfoString<'_> {
                                     if idx + cstr.count_bytes() + 1 != string_table.len() {
                                         return Err(ParseError::InvalidStrTable);
                                     }
-
                                     cstr
                                 }
                                 Err(_) => {
@@ -514,7 +574,10 @@ impl TermInfoString<'_> {
                                 }
                             },
                         };
-                        TermInfoString::There(cstr.to_bytes())
+                        match cstr.to_str() {
+                            Ok(str) => TermInfoString::Name(str),
+                            Err(_) => return Err(ParseError::InvalidExtName),
+                        }
                     }
                     -1 => TermInfoString::NotImpl,
                     -2 => TermInfoString::IdkCanceled,
@@ -534,7 +597,7 @@ impl TermInfoString<'_> {
 }
 
 #[repr(i8)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum TermInfoBool {
     Working = 1,
     Disabled = 0,
@@ -544,7 +607,7 @@ pub enum TermInfoBool {
 
 impl TermInfoBool {
     fn parse<'file, const EXT: bool>(
-        buf: &mut &[u8],
+        buf: &mut SeqBuf,
         count: i16,
     ) -> Result<&'file [TermInfoBool], ParseError> {
         match buf.get_first_to_t::<TermInfoBool>(count as usize) {
@@ -569,7 +632,7 @@ impl TermInfoBool {
             }
         }
     }
-    fn valid(&self) -> bool {
+    pub const fn valid(&self) -> bool {
         ((*self) as i8) < 2 && (*self) as i8 > -3
     }
 }
@@ -577,6 +640,129 @@ impl TermInfoBool {
 type TermInfoInt = i16;
 // FIXME Fix the Alignment Problem
 type TermInfoExtInt = [u8; 4];
+
+impl Display for TermInfo<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TermInfoEntry: {{\n\tnames: {:?},\n\tbools: {},\n\tints: {},\n\tstrings: {},\n\textension: {}\n}}",
+            self.names,
+            {
+                let mut str = String::from("[\n");
+                self.bools.iter().enumerate().for_each(|(i, bool)| {
+                    str.push_str(&format!("\t\t{} = {:?}\n", BOOL_NAMES[i].0, bool))
+                });
+                str.push_str("\t]");
+                str
+            },
+            self.ints,
+            {
+                let mut str = String::from("[\n");
+                self.strings.iter().enumerate().for_each(|(i, slice)| {
+                    str.push_str(&format!("\t\t{} = {:?}\n", STRING_NAMES[i].0, slice))
+                });
+                str.push_str("\t]");
+                str
+            },
+            match self.ext_format {
+                Some(ref ext) => format!("Some({})", ext),
+                None => "None".to_string(),
+            }
+        )
+    }
+}
+
+impl Display for TermInfoExt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Extension: {{\n\t\tbools: [{}\n\t\t],\n\t\tints: [{}\n\t\t],\n\t\tstrings: [{}\n\t\t]\n\t}}",
+            {
+                let mut str = String::new();
+                self.bools.iter().enumerate().for_each(|(i, bool)| {
+                    str.push_str(&format!(
+                        "\n\t\t\t{:?}: {:?}",
+                        self.get_bool_name(i).unwrap(),
+                        bool
+                    ))
+                });
+                str
+            },
+            {
+                let mut str = String::new();
+                match self.ints {
+                    FormatnInts::Legacy(ints) => ints.iter().enumerate().for_each(|(i, bool)| {
+                        str.push_str(&format!(
+                            "\n\t\t\t{:?}: {:?}",
+                            self.get_int_name(i).unwrap(),
+                            bool
+                        ))
+                    }),
+                    FormatnInts::Extended(ints) => ints.iter().enumerate().for_each(|(i, bool)| {
+                        str.push_str(&format!(
+                            "\n\t\t\t{:?}: {:?}",
+                            self.get_int_name(i).unwrap(),
+                            bool
+                        ))
+                    }),
+                }
+                str
+            },
+            {
+                let mut str = String::new();
+                self.str_table.iter().enumerate().for_each(|(i, bool)| {
+                    str.push_str(&format!(
+                        "\n\t\t\t{:?}: {:?}",
+                        self.get_str_name(i).unwrap(),
+                        bool
+                    ))
+                });
+                str
+            },
+        )
+    }
+}
+
+impl Display for FormatnInts<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TermInfoInts: {{\n\t\tversion: {},\n\t\tints: {}\n\t}}",
+            match self {
+                Self::Legacy(_) => "Legacy Ints(16-bit)",
+                Self::Extended(_) => "Extended Ints(32-bit)",
+            },
+            match self {
+                Self::Legacy(leg) => {
+                    let mut str = String::from("[\n");
+                    for (i, int) in leg.iter().enumerate() {
+                        str.push_str(&format!("\t\t\t{} = {}\n", INT_NAMES[i].0, int));
+                    }
+                    str.push_str("\t\t]");
+                    str
+                }
+                Self::Extended(ints) => {
+                    let mut str = String::from("[\n");
+                    for (i, int) in ints.iter().enumerate() {
+                        str.push_str(&format!(
+                            "\t\t\t{} = {}\n",
+                            INT_NAMES[i].0,
+                            i32::from_le_bytes(*int)
+                        ));
+                    }
+                    str.push_str("\t]");
+                    str
+                }
+            }
+        )
+    }
+}
+
+impl Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
 
 #[test]
 fn test() {

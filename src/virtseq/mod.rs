@@ -1,12 +1,15 @@
 mod terminfo;
 
-pub use terminfo::TermInfo;
+pub use terminfo::{TermInfo, TermInfoBool, TermInfoString};
 
 mod virtbuf;
 
 pub use virtbuf::VirtSeqBuf;
 
-pub trait TermControl {
-    type Result<T>;
-    fn clear_screen(&self, buf: &) -> Self::Result<()>;
-}
+mod control;
+
+pub use control::{TermControl, TermInfoConfig};
+
+mod names;
+
+pub use names::{BOOL_NAMES, INT_NAMES, STRING_NAMES, const_str_cmp};

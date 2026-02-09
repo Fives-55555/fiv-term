@@ -240,29 +240,48 @@ macro_rules! bitfield {
     };
 }
 
-pub trait SeqBuf {
-    fn get_first<'ret>(self, len: usize) -> Option<&'ret [u8]>;
-    fn get_first_to_t<'ret, T>(self, len: usize) -> Option<&'ret [T]>;
+pub struct SeqBuf {
+    buf: Box<[u8]>,
+    base: *const u8,
+    len: usize,
 }
 
-impl SeqBuf for &mut &[u8] {
-    fn get_first<'ret>(self, len: usize) -> Option<&'ret [u8]> {
-        if self.len() >= len {
-            let ptr = self.as_ptr();
-            *self = &self[len..];
-            Some(unsafe { slice::from_raw_parts(ptr, len) })
+impl SeqBuf {
+    pub fn new(buf: Box<[u8]>) -> SeqBuf {
+        SeqBuf {
+            base: buf.as_ptr(),
+            len: buf.len(),
+            buf,
+        }
+    }
+    pub fn get_first<'ret>(&mut self, block_len: usize) -> Option<&'ret [u8]> {
+        if self.len >= block_len {
+            let ptr = self.base;
+            self.len -= block_len;
+            self.base = unsafe { self.base.add(block_len) };
+            Some(unsafe { slice::from_raw_parts(ptr, block_len) })
         } else {
             None
         }
     }
-    fn get_first_to_t<'ret, T>(self, len: usize) -> Option<&'ret [T]> {
-        let real_len = len * size_of::<T>();
-        if self.len() >= real_len {
-            let ptr = self.as_ptr();
-            *self = &self[real_len..];
-            Some(unsafe { slice::from_raw_parts(ptr as *const T, len) })
+    pub fn get_first_to_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
+        let real_len = block_len * size_of::<T>();
+        if self.len >= real_len {
+            let ptr = self.base;
+            self.len -= real_len;
+            self.base = unsafe { self.base.add(real_len) };
+            Some(unsafe { slice::from_raw_parts(ptr as *const T, block_len) })
         } else {
             None
         }
+    }
+    pub fn base(&self) -> *const u8 {
+        self.base
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn end(self) -> Option<Box<[u8]>> {
+        if self.len == 0 { Some(self.buf) } else { None }
     }
 }

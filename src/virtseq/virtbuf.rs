@@ -1,7 +1,6 @@
-use crate::{
-    TerminalTrait,
-    stuff::{FastForwardFormat, NumberBuffer},
-};
+use std::io::{Write, stdout};
+
+use crate::stuff::{FastForwardFormat, NumberBuffer};
 
 pub struct VirtSeqBuf {
     pub buf: [u8; Self::BUFFER_SIZE],
@@ -11,7 +10,7 @@ pub struct VirtSeqBuf {
 
 impl VirtSeqBuf {
     pub const BUFFER_SIZE: usize = 128;
-    pub const fn new(&self) -> Self {
+    pub const fn new() -> Self {
         VirtSeqBuf {
             buf: [0; Self::BUFFER_SIZE],
             idx: 0,
@@ -25,7 +24,26 @@ impl VirtSeqBuf {
         self.idx += x;
         Ok(())
     }
+    pub fn write(&mut self, buf: &[u8]) -> Result<(), ()> {
+        if self.cap >= buf.len() {
+            self.buf[self.idx..self.idx + buf.len()].copy_from_slice(buf);
+            self.cap -= buf.len();
+            self.idx += buf.len();
+            return Ok(());
+        }
+        return Err(());
+    }
+    // FIXME
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        stdout().write(&self.buf[0..self.idx])?;
+        stdout().flush()?;
+        self.cap = Self::BUFFER_SIZE;
+        self.idx = 0;
+        Ok(())
+    }
 }
+
+/*
 
 pub enum VirtualAction {
     MoveTo,
@@ -194,8 +212,8 @@ pub struct RgbColor {
     red: u8,
     green: u8,
     blue: u8,
-}
-
+}*/
+/*
 pub struct VT100 {}
 
 impl VT100 {
@@ -221,4 +239,4 @@ impl VT100 {
         ("DECARM", "resetrep", (), "[?8l"),
         ("DECINLM", "resetinter", (), "[?9l"),
     ];
-}
+}*/
