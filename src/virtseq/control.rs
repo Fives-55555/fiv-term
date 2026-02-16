@@ -84,7 +84,11 @@ impl TermControl for TermInfoConfig<'_> {
 /// --------
 /// Custom data
 /// With logic needed to be called at some point
-pub struct StringCapParser {}
+/// 
+pub struct StringCapParser {
+    string: Box<[Op]>,
+        
+}
 
 impl StringCapParser {
     fn parse(str: &[u8]) -> Result<Box<dyn Fn(&mut VirtSeqBuf, i16, i16) -> i16>, ()> {
@@ -139,8 +143,7 @@ impl StringCapParser {
     }
 }
 
-#[repr(u8)]
-enum Op {
+enum Expr {
     //Num
     Add,         // +
     Sub,         // -
@@ -165,13 +168,18 @@ enum Op {
     Then,   // t
     IfElse, // e
     IfStop, // %
-    //Vars
+    // vars
+    Vars(Vars),
+    Const(u8)//Bounds not clear
+}
+
+#[repr(u8)]
+enum Op {
     PrintOOO(Vars), // Expects a ???? o?
     PrintHex(Vars), // Expects a i16? X? x?
     PrintInt(Vars), // Expects a i16? d?
     PrintStr(Vars), // Expects a *const char? s?
-    Push(Vars),
-    PushConst(u8), // Bounds not clear
+    Push(Expr),
     Byte(u8),
 }
 
