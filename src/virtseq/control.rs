@@ -1,5 +1,3 @@
-use std::io::{Write, stdout};
-
 use crate::{SeqBuf, idx_name};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
@@ -78,6 +76,114 @@ impl TermControl for TermInfoConfig<'_> {
         println!("{:?}", self.set_pos);
         Err(())
     }
+}
+
+/// [Stack]
+/// --------
+/// [data(valid u8)(FUCK) | Maybe parse and create runtime function | Escape parsing at usage]
+/// --------
+/// Custom data
+/// With logic needed to be called at some point
+pub struct StringCapParser {}
+
+impl StringCapParser {
+    fn parse(str: &[u8]) -> Result<Box<dyn Fn(&mut VirtSeqBuf, i16, i16) -> i16>, ()> {
+        let mut op_stack: Vec<Op> = Vec::new();
+
+        let mut bytes = str.iter();
+        let mut char = *bytes.next().ok_or(())?;
+
+        loop {
+            op_stack.push(if char == b'%' {
+                char = *bytes.next().ok_or(())?;
+                match char {
+                    b'p' => {
+                        char = *bytes.next().ok_or(())?;
+                        if char >= b'1' && char <= b'9' {
+                            Op::Push(Vars::Param((char - (b'1' - 1), VarType::Unknown)))
+                        } else {
+                            return Err(());
+                        }
+                    }
+                    b'+' => Op::Add,
+                    b'&' => Op::And,
+                    b'A' => Op::CondAnd,
+                    b'!' => Op::CondNot,
+                    b'O' => Op::CondOR,
+                    b'/' => Op::Div,
+                    b'=' => Op::Eq,
+                    b'?' => Op::If,
+                    b'e' => Op::IfElse,
+                    b'i' => Op::Inc,
+                    b'>' => Op::LargerThen,
+                    b'm' => Op::Mod,
+                    b'*' => Op::Mul,
+                    b'|' => Op::Or,
+                    b'<' => Op::SmallerThen,
+                    b'l' => Op::StrLen,
+                    b'-' => Op::Sub,
+                    b'^' => Op::Xor,
+                    b'%' => Op::Byte(b'%'),
+                    _ => todo!(),
+                }
+            } else {
+                Op::Byte(char)
+            });
+            char = match bytes.next() {
+                Some(char) => *char,
+                None => break,
+            };
+        }
+
+        Ok(Box::new(|x, z, y| z))
+    }
+}
+
+#[repr(u8)]
+enum Op {
+    //Num
+    Add,         // +
+    Sub,         // -
+    Mul,         // *
+    Div,         // /
+    Mod,         // m
+    And,         // &
+    Or,          // |
+    Xor,         // ^
+    Eq,          // =
+    LargerThen,  // >
+    SmallerThen, // <
+    Inc,         // i Adds to first to parameters
+    //Str
+    StrLen, // l
+    //Bool
+    CondOR,  // O
+    CondAnd, // A
+    CondNot, // !
+    //Branching
+    If,     // ?
+    Then,   // t
+    IfElse, // e
+    IfStop, // %
+    //Vars
+    PrintOOO(Vars), // Expects a ???? o?
+    PrintHex(Vars), // Expects a i16? X? x?
+    PrintInt(Vars), // Expects a i16? d?
+    PrintStr(Vars), // Expects a *const char? s?
+    Push(Vars),
+    PushConst(u8), // Bounds not clear
+    Byte(u8),
+}
+
+enum Vars {
+    Param((u8, VarType)),
+}
+
+enum VarType {
+    String,
+    Int,
+    BoolMAYBE,
+    Unknown,
 }
 
 #[test]
