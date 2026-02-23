@@ -1,3 +1,5 @@
+use std::mem::MaybeUninit;
+
 use crate::{SeqBuf, idx_name};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
@@ -84,27 +86,65 @@ impl TermControl for TermInfoConfig<'_> {
 /// --------
 /// Custom data
 /// With logic needed to be called at some point
-/// 
-pub struct StringCapParser {
-    string: Box<[Op]>,
-        
+///
+pub enum ParsedStringCap<'buf> {
+    Static(&'buf [u8]),
+    Dynamic {},
+    Branching,
 }
 
-impl StringCapParser {
-    fn parse(str: &[u8]) -> Result<Box<dyn Fn(&mut VirtSeqBuf, i16, i16) -> i16>, ()> {
-        let mut op_stack: Vec<Op> = Vec::new();
+impl<'buf> ParsedStringCap<'buf> {
+    const OP_STACK_SIZE: usize = 16;
+    fn parse<F>(str: &[u8], mut buf: Vec<u8>) -> Result<Box<dyn Fn(&mut VirtSeqBuf)>, ()> {
+        let mut stack: [MaybeUninit<&Expr>; Self::OP_STACK_SIZE] =
+            [MaybeUninit::uninit(); Self::OP_STACK_SIZE];
+
+        let mut params: Vec<Var> = Vec::new();
+
+        let mut expr: Vec<Expr> = Vec::new();
+
+        let mut print: Vec<Print> = Vec::new();
 
         let mut bytes = str.iter();
         let mut char = *bytes.next().ok_or(())?;
 
+        let mut dyn_str_cap = false;
+
         loop {
-            op_stack.push(if char == b'%' {
+            if char == b'%' {
                 char = *bytes.next().ok_or(())?;
+                if !dyn_str_cap && char != b'%' {
+                    dyn_str_cap = true;
+                }
+
                 match char {
                     b'p' => {
                         char = *bytes.next().ok_or(())?;
                         if char >= b'1' && char <= b'9' {
-                            Op::Push(Vars::Param((char - (b'1' - 1), VarType::Unknown)))
+                            let id = char - (b'1' - 1);
+                            let mut exists = None;
+                            for param in params.iter() {
+                                if param.id == id {
+                                    exists = Some(param);
+                                    break;
+                                } else {
+                                    continue;
+                                }
+                            }
+                            let mut expr_type = match exists {
+                                Some(para) => para.expr_type,
+                                None => ExprType::Unknown,
+                            };
+                            let param = exists.unwrap_or_else(|| {
+                                &*params.push_mut(Var {
+                                    id,
+                                    expr_type: ExprType::Unknown,
+                                })
+                            });
+                            expr.push(Expr {
+                                exprs: ExprEnum::Ground(param),
+                                expr_type,
+                            });
                         } else {
                             return Err(());
                         }
@@ -132,62 +172,71 @@ impl StringCapParser {
                 }
             } else {
                 Op::Byte(char)
-            });
+            };
             char = match bytes.next() {
                 Some(char) => *char,
                 None => break,
             };
         }
-
+        // FIXME Add Static check
         Ok(Box::new(|x, z, y| z))
     }
 }
 
-enum Expr {
+#[derive(Clone, Copy)]
+struct Expr<'a> {
+    exprs: ExprEnum<'a>,
+    expr_type: ExprType,
+}
+
+#[derive(Clone, Copy)]
+enum ExprEnum<'a> {
     //Num
-    Add,         // +
-    Sub,         // -
-    Mul,         // *
-    Div,         // /
-    Mod,         // m
-    And,         // &
-    Or,          // |
-    Xor,         // ^
-    Eq,          // =
-    LargerThen,  // >
-    SmallerThen, // <
-    Inc,         // i Adds to first to parameters
+    Add((&'a Expr<'a>, &'a Expr<'a>)), // +
+    Sub((&'a Expr<'a>, &'a Expr<'a>)), // -
+    Mul((&'a Expr<'a>, &'a Expr<'a>)), // *
+    Div((&'a Expr<'a>, &'a Expr<'a>)), // /
+    Mod((&'a Expr<'a>, &'a Expr<'a>)), // m
+    And((&'a Expr<'a>, &'a Expr<'a>)), // &
+    Or((&'a Expr<'a>, &'a Expr<'a>)),  // |
+    Xor((&'a Expr<'a>, &'a Expr<'a>)), // ^
+    //Cond
+    Eq((&'a Expr<'a>, &'a Expr<'a>)),          // =
+    LargerThen((&'a Expr<'a>, &'a Expr<'a>)),  // >
+    SmallerThen((&'a Expr<'a>, &'a Expr<'a>)), // <
+    //FIXME P1
+    Inc, // i Adds to first to parameters
     //Str
-    StrLen, // l
+    StrLen(&'a Expr<'a>), // l
     //Bool
-    CondOR,  // O
-    CondAnd, // A
-    CondNot, // !
+    CondOR((&'a Expr<'a>, &'a Expr<'a>)),  // O
+    CondAnd((&'a Expr<'a>, &'a Expr<'a>)), // A
+    CondNot(&'a Expr<'a>),                 // !
     //Branching
-    If,     // ?
-    Then,   // t
-    IfElse, // e
-    IfStop, // %
+    If(&'a Expr<'a>), // ?
     // vars
-    Vars(Vars),
-    Const(u8)//Bounds not clear
+    Ground(&'a Var),
 }
 
 #[repr(u8)]
-enum Op {
-    PrintOOO(Vars), // Expects a ???? o?
-    PrintHex(Vars), // Expects a i16? X? x?
-    PrintInt(Vars), // Expects a i16? d?
-    PrintStr(Vars), // Expects a *const char? s?
-    Push(Expr),
+enum Print<'a> {
+    PrintOOO(Expr<'a>), // Expects a ???? o?
+    PrintHex(Expr<'a>), // Expects a i16? X? x?
+    PrintInt(Expr<'a>), // Expects a i16? d?
+    PrintStr(Expr<'a>), // Expects a *const char? s?
+    Push(Expr<'a>),
     Byte(u8),
 }
 
-enum Vars {
-    Param((u8, VarType)),
+/// Param id is (0..9)
+#[derive(Clone, Copy)]
+struct Var {
+    id: u8,
+    expr_type: ExprType,
 }
 
-enum VarType {
+#[derive(Clone, Copy)]
+enum ExprType {
     String,
     Int,
     BoolMAYBE,
