@@ -154,11 +154,11 @@ impl<'buf> ParsedStringCap<'buf> {
                         }
                     }
                     b'+' => {
-                        let ops = Self::get_exprs::<2>(&mut stack)?;
+                        let opr = Self::get_exprs::<2>(&mut stack)?;
                         
-                            if matches!(lhs.expr_type, ExprType::Unknown | ExprType::Int) && matches!(rhs.expr_type, ExprType::Unknown | ExprType::Int)
+                            if matches!(opr[0].expr_type, ExprType::Unknown | ExprType::Int) && matches!(opr[1].expr_type, ExprType::Unknown | ExprType::Int)
                             Expr{
-                                exprs: ExprEnum::Add((lhs, rhs)),
+                                exprs: ExprEnum::Add((opr[0], opr[1])),
                                 expr_type: ExprType::Int,
                             }
                     },
