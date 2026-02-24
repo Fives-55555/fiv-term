@@ -110,12 +110,16 @@ impl<'buf> ParsedStringCap<'buf> {
         loop {
             if char == b'%' {
                 char = *bytes.next().ok_or(())?;
-                if char != b'%' {
-                    if !dyn_str_cap {
+                if char == b'%' {
+                    print.push(Print::Byte(b'%'));
+                    char = match bytes.next() {
+                        Some(char) => *char,
+                        None => break,
+                    };
+                    continue;
+                } else if !dyn_str_cap {
                         dyn_str_cap = true;
                     }
-                } else {
-                }
 
                 expr.push(match char {
                     b'p' => {
@@ -149,7 +153,15 @@ impl<'buf> ParsedStringCap<'buf> {
                             return Err(());
                         }
                     }
-                    b'+' => ,
+                    b'+' => {
+                        let ops = Self::get_exprs::<2>(&mut stack)?;
+                        
+                            if matches!(lhs.expr_type, ExprType::Unknown | ExprType::Int) && matches!(rhs.expr_type, ExprType::Unknown | ExprType::Int)
+                            Expr{
+                                exprs: ExprEnum::Add((lhs, rhs)),
+                                expr_type: ExprType::Int,
+                            }
+                    },
                     b'&' => Op::And,
                     b'A' => Op::CondAnd,
                     b'!' => Op::CondNot,
@@ -179,6 +191,17 @@ impl<'buf> ParsedStringCap<'buf> {
         }
         // FIXME Add Static check
         Ok(Box::new(|x, z, y| z))
+    }
+    fn get_exprs<const N: usize>(stack: &mut Stack)->Result<[&Expr;N], ()> {
+        if stack.len() >= N {
+            let res: [&Expr; N];
+            for elem in res.iter_mut() {
+                *elem = stack.pop().unwrap();
+            }
+            Ok(res)
+        }else {
+            return Err(())
+        }
     }
 }
 
