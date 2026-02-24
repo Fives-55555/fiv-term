@@ -285,3 +285,32 @@ impl SeqBuf {
         if self.len == 0 { Some(self.buf) } else { None }
     }
 }
+
+pub struct Stack<T: Copy, const SIZE: usize> {
+    stack: [MaybeUninit<T>; SIZE],
+    head: usize,
+}
+
+impl<T: Copy, const N: usize> Stack<T, N> {
+    pub fn new() -> Stack<T, N> {
+        Stack {
+            stack: [MaybeUninit::uninit(); N],
+            head: 0,
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.head
+    }
+    pub fn push(&mut self, value: T) {
+        self.stack[self.head].write(value);
+        self.head += 1;
+    }
+    pub fn pop(&mut self) -> Option<T> {
+        if self.head != 0 {
+            self.head -= 1;
+            Some(unsafe { self.stack[self.head].assume_init() })
+        } else {
+            None
+        }
+    }
+}

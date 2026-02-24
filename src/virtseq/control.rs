@@ -1,6 +1,4 @@
-use std::mem::MaybeUninit;
-
-use crate::{SeqBuf, idx_name};
+use crate::{SeqBuf, idx_name, stuff::Stack};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
 
@@ -96,8 +94,7 @@ pub enum ParsedStringCap<'buf> {
 impl<'buf> ParsedStringCap<'buf> {
     const OP_STACK_SIZE: usize = 16;
     fn parse<F>(str: &[u8], mut buf: Vec<u8>) -> Result<Box<dyn Fn(&mut VirtSeqBuf)>, ()> {
-        let mut stack: [MaybeUninit<&Expr>; Self::OP_STACK_SIZE] =
-            [MaybeUninit::uninit(); Self::OP_STACK_SIZE];
+        let mut stack: Stack<&Expr, Self::OP_STACK_SIZE> = Stack::new();
 
         let mut params: Vec<Var> = Vec::new();
 
@@ -113,11 +110,14 @@ impl<'buf> ParsedStringCap<'buf> {
         loop {
             if char == b'%' {
                 char = *bytes.next().ok_or(())?;
-                if !dyn_str_cap && char != b'%' {
-                    dyn_str_cap = true;
+                if char != b'%' {
+                    if !dyn_str_cap {
+                        dyn_str_cap = true;
+                    }
+                } else {
                 }
 
-                match char {
+                expr.push(match char {
                     b'p' => {
                         char = *bytes.next().ok_or(())?;
                         if char >= b'1' && char <= b'9' {
@@ -149,7 +149,7 @@ impl<'buf> ParsedStringCap<'buf> {
                             return Err(());
                         }
                     }
-                    b'+' => Op::Add,
+                    b'+' => ,
                     b'&' => Op::And,
                     b'A' => Op::CondAnd,
                     b'!' => Op::CondNot,
@@ -167,11 +167,10 @@ impl<'buf> ParsedStringCap<'buf> {
                     b'l' => Op::StrLen,
                     b'-' => Op::Sub,
                     b'^' => Op::Xor,
-                    b'%' => Op::Byte(b'%'),
                     _ => todo!(),
-                }
+                })
             } else {
-                Op::Byte(char)
+                print.push(Byte(char))
             };
             char = match bytes.next() {
                 Some(char) => *char,
