@@ -73,23 +73,12 @@ impl TermControl for TermInfoConfig<'_> {
         buf.write(self.get_pos_req)
     }
     fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Self::Result<()> {
-        println!("{:?}", self.set_pos);
-        Err(())
+        // FIXME make it retry on no space left
+        self.set_cursor_pos(buf, x, y)
     }
 }
 
-/// [Stack]
-/// --------
-/// [data(valid u8)(FUCK) | Maybe parse and create runtime function | Escape parsing at usage]
-/// --------
-/// Custom data
-/// With logic needed to be called at some point
-///
-pub enum ParsedStringCap<'buf> {
-    Static(&'buf [u8]),
-    Dynamic {},
-    Branching,
-}
+pub struct ParsedStringCap<'buf>(Box<dyn Fn(&mut VirtSeqBuf)>);
 
 impl<'buf> ParsedStringCap<'buf> {
     const OP_STACK_SIZE: usize = 16;
@@ -261,7 +250,7 @@ struct Var {
 enum ExprType {
     String,
     Int,
-    BoolMAYBE,
+    Bool,
     Unknown,
 }
 
