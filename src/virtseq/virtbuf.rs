@@ -5,7 +5,6 @@ use crate::stuff::{FastForwardFormat, NumberBuffer};
 pub struct VirtSeqBuf {
     pub buf: [u8; Self::BUFFER_SIZE],
     pub idx: usize,
-    pub cap: usize,
 }
 
 impl VirtSeqBuf {
@@ -14,20 +13,17 @@ impl VirtSeqBuf {
         VirtSeqBuf {
             buf: [0; Self::BUFFER_SIZE],
             idx: 0,
-            cap: Self::BUFFER_SIZE,
         }
     }
     pub fn format_num(&mut self, num: u16) -> Result<(), ()> {
         let mut buf = NumberBuffer::try_from(&mut self.buf[self.idx..])?;
         let x = num.forward_format(&mut buf);
-        self.cap -= x;
         self.idx += x;
         Ok(())
     }
     pub fn write(&mut self, buf: &[u8]) -> Result<(), ()> {
-        if self.cap >= buf.len() {
+        if self.cap_left() >= buf.len() {
             self.buf[self.idx..self.idx + buf.len()].copy_from_slice(buf);
-            self.cap -= buf.len();
             self.idx += buf.len();
             return Ok(());
         }
@@ -37,9 +33,11 @@ impl VirtSeqBuf {
     pub fn flush(&mut self) -> std::io::Result<()> {
         stdout().write(&self.buf[0..self.idx])?;
         stdout().flush()?;
-        self.cap = Self::BUFFER_SIZE;
         self.idx = 0;
         Ok(())
+    }
+    pub fn cap_left(&self)->usize{
+        Self::BUFFER_SIZE-self.idx
     }
 }
 
