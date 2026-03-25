@@ -1,5 +1,5 @@
 use core::fmt::NumBufferTrait;
-use std::{mem::MaybeUninit, slice};
+use std::{fmt::Debug, mem::MaybeUninit, slice};
 
 #[derive(Debug)]
 pub struct NumberBuffer<T: NumBufferTrait>
@@ -289,6 +289,16 @@ impl SeqBuf {
 pub struct Stack<T: Copy, const SIZE: usize> {
     stack: [MaybeUninit<T>; SIZE],
     head: usize,
+}
+
+impl<T: Debug + Copy, const N: usize> Debug for Stack<T, N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stack: [")?;
+        for i in 0..self.head {
+            write!(f, "{:?}", unsafe { self.stack[i].assume_init_ref() })?;
+        }
+        write!(f, "]")
+    }
 }
 
 impl<T: Copy, const N: usize> Stack<T, N> {

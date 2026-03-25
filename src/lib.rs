@@ -2,6 +2,11 @@
 #![feature(ptr_mask)]
 #![feature(maybe_uninit_array_assume_init)]
 #![feature(str_as_str)]
+#![feature(iter_next_chunk)]
+#![feature(lock_value_accessors)]
+#![feature(iter_advance_by)]
+#![allow(internal_features)]
+#![feature(core_intrinsics)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 

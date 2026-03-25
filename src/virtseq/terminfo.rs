@@ -28,7 +28,7 @@ pub struct TermInfo<'file> {
     ext_format: Option<TermInfoExt<'file>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ParseError {
     Debug,
 
@@ -66,6 +66,21 @@ pub enum ParseError {
     InvalidExtCStr,
     InvalidExtName,
     InvalidExtStrTable,
+    // String Parser
+    IncompleteMod,
+    IncompleteParam,
+    InvalidParam,
+    WrongType,
+    EmptyStack,
+    InvalidMod,
+    NotEmptyStack,
+    IncompleteCharConst,
+    InvalidCharConst,
+    MissingFeatureIf,
+    InvalidInputMatch,
+    MissingFeatureMatch,
+    InvalidConsts,
+    MissingFeatureConsts,
 }
 
 impl Error for ParseError {}

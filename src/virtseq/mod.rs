@@ -1,6 +1,6 @@
 mod terminfo;
 
-pub use terminfo::{TermInfo, TermInfoBool, TermInfoString};
+pub use terminfo::{ParseError, TermInfo, TermInfoBool, TermInfoString};
 
 mod virtbuf;
 
