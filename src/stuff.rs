@@ -254,7 +254,7 @@ impl SeqBuf {
             buf,
         }
     }
-    pub fn get_first<'ret>(&mut self, block_len: usize) -> Option<&'ret [u8]> {
+    pub fn get_next<'ret>(&mut self, block_len: usize) -> Option<&'ret [u8]> {
         if self.len >= block_len {
             let ptr = self.base;
             self.len -= block_len;
@@ -264,11 +264,27 @@ impl SeqBuf {
             None
         }
     }
-    pub fn get_first_to_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
+    pub fn get_next_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
         let real_len = block_len * size_of::<T>();
         if self.len >= real_len {
             let ptr = self.base;
             self.len -= real_len;
+            self.base = unsafe { self.base.add(real_len) };
+            Some(unsafe { slice::from_raw_parts(ptr as *const T, block_len) })
+        } else {
+            None
+        }
+    }
+    pub fn get_next_aligned_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
+        let alignment = align_of::<T>() as isize;
+
+        let offset = ((-(self.base as isize)) & (alignment - 1)) as usize;
+        let real_len = block_len * size_of::<T>();
+
+        if self.len >= real_len + offset {
+            unsafe { self.base.add(offset) };
+            let ptr = self.base;
+            self.len -= real_len + offset;
             self.base = unsafe { self.base.add(real_len) };
             Some(unsafe { slice::from_raw_parts(ptr as *const T, block_len) })
         } else {
@@ -286,7 +302,67 @@ impl SeqBuf {
     }
 }
 
-pub struct Stack<T: Copy, const SIZE: usize> {
+pub trait AlignedPush {
+    fn align_to_t<T>(&mut self);
+    fn push_aligned<T>(&mut self, value: T);
+}
+
+impl AlignedPush for Vec<u8> {
+    fn align_to_t<T>(&mut self) {
+        let alignment = align_of::<T>() as isize;
+
+        let ptr = self.as_ptr() as isize + self.len() as isize;
+        let offset = ((-ptr) & (alignment - 1)) as usize;
+
+        self.reserve(offset);
+        unsafe { self.set_len(self.len() + offset) };
+    }
+    fn push_aligned<T>(&mut self, value: T) {
+        let size = size_of::<T>();
+        let alignment = align_of::<T>() as isize;
+
+        let ptr = self.as_ptr() as isize + self.len() as isize;
+        let offset = ((-ptr) & (alignment - 1)) as usize;
+
+        self.reserve(offset + size);
+
+        let elem = (ptr as usize + offset) as *mut T;
+
+        unsafe {
+            *elem = value;
+            self.set_len(self.len() + offset + size)
+        };
+    }
+}
+
+// pub trait AlignedPop {
+//     fn pop_aligned_to_t<T>(&mut self);
+//     fn pop_aligned<'a, T>(&mut self) -> &'a T;
+// }
+
+// impl AlignedPop for &[u8] {
+//     fn pop_aligned_to_t<T>(&mut self) {
+//         let alignment = align_of::<T>() as isize;
+
+//         let ptr = self.as_ptr() as isize + self.len() as isize;
+//         let offset = ((-ptr) & (alignment - 1)) as usize;
+
+//         *self = &self[offset..];
+//     }
+//     fn pop_aligned<'a, T>(&mut self) -> &'a T {
+//         self.pop_aligned_to_t::<T>();
+//         let size = size_of::<T>();
+
+//         let ptr = unsafe { (self.as_ptr() as *mut T).as_ref_unchecked() };
+//         *self = &self[size..];
+//         return ptr;
+//     }
+// }
+
+pub struct Stack<T: Copy, const SIZE: usize>
+where
+    [(); SIZE]:,
+{
     stack: [MaybeUninit<T>; SIZE],
     head: usize,
 }

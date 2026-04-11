@@ -1,6 +1,8 @@
 use std::array;
 
-use crate::{SeqBuf, idx_name, stuff::Stack, virtseq::ParseError};
+use libc::KERN_PRINTK_RATELIMIT;
+
+use crate::{AlignedPush, SeqBuf, Stack, idx_name, virtseq::ParseError};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
 
@@ -18,23 +20,53 @@ pub struct TermInfoConfig<'me> {
     clear: &'me [u8],
     get_pos_res: &'me [u8],
     get_pos_req: &'me [u8],
-    set_pos: &'me [u8],
+    set_pos: ParsedStringCap<'me, 2>,
 }
 
-macro_rules! get_strs {
-    ($entry:expr, $buf:expr, $(($id:ident, $nc_name:literal),)*) => {
+macro_rules! get_strs {(
+        $entry:expr,
+        $buffer:expr,
         $(
-            let $id = {
-                let str = $entry.get_str(idx_name!(STRING, $nc_name));
-                match *str.unwrap() {
-                    TermInfoString::There(slice) => {
-                        $buf.extend(slice);
-                        slice.len()
-                    }
-                    _ => return Err(()),
+            $id:ident,
+            $name:literal
+            $(, $dir:ident, $io:expr)?
+        );+ $(;)?
+    ) => {
+        $(
+            get_strs!(_ $entry, $buffer, $id, $name $(, $dir, $io)?);
+        )+
+    };
+    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal) => {
+        let $id = {
+            let str = $entry.get_str(idx_name!(STRING, $name));
+            match *str.unwrap() {
+                TermInfoString::There(slice) => {
+                    $buffer.extend(slice);
+                    slice.len()
                 }
-            };
-        )*
+                _ => return Err(()),
+            }
+        };
+    };
+    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal, out, $io:expr) => {
+        let $id = {
+            let str = $entry.get_str(idx_name!(STRING, $name));
+            match *str.unwrap() {
+                TermInfoString::There(slice) => {
+                    ParsedStringCap::<{$io.len()}>::parse_out(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io as &[(u8, ExprType)]).unwrap()
+                }
+                _=>return Err(())
+            }
+        };
+    };
+    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal, in, $io:expr) => {
+        let str = $entry.get_str(idx_name!(STRING, $name));
+        match *str.unwrap() {
+            TermInfoString::There(slice) => {
+                ParsedStringCap::parse_in(&mut $buffer, slice, io);
+            }
+            _=>return Err(())
+        }
     };
 }
 
@@ -46,19 +78,19 @@ impl TermInfoConfig<'_> {
         get_strs!(
             entry,
             buf,
-            (clear, "clear_screen"),
-            (get_pos_res, "user6"),
-            (get_pos_req, "user7"),
-            (set_pos, "cursor_address"),
+            clear, "clear_screen";
+            get_pos_res, "user6";
+            get_pos_req, "user7";
+            set_pos, "cursor_address", out, &[(0u8, ExprType::Int),(1u8, ExprType::Int)];
         );
 
         let mut buf = SeqBuf::new(buf.into_boxed_slice());
 
         Ok(TermInfoConfig {
-            clear: buf.get_first(clear).unwrap(),
-            get_pos_res: buf.get_first(get_pos_res).unwrap(),
-            get_pos_req: buf.get_first(get_pos_req).unwrap(),
-            set_pos: buf.get_first(set_pos).unwrap(),
+            clear: buf.get_next(clear).unwrap(),
+            get_pos_res: buf.get_next(get_pos_res).unwrap(),
+            get_pos_req: buf.get_next(get_pos_req).unwrap(),
+            set_pos: set_pos,
             buf: buf.end().ok_or(())?,
             resp: Vec::with_capacity(4),
         })
@@ -66,7 +98,7 @@ impl TermInfoConfig<'_> {
 }
 
 impl TermControl for TermInfoConfig<'_> {
-    type Result<T> = Result<T, ()>;
+    type Result<T> = std::io::Result<T>;
     fn clear_screen(&self, buf: &mut VirtSeqBuf) -> Self::Result<()> {
         buf.write(self.clear)
     }
@@ -74,21 +106,30 @@ impl TermControl for TermInfoConfig<'_> {
         self.resp.push((self.get_pos_res, user_data));
         buf.write(self.get_pos_req)
     }
-    fn set_cursor_pos(&self, _buf: &mut VirtSeqBuf, _x: i16, _y: i16) -> Self::Result<()> {
-        Err(())
+    fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Self::Result<()> {
+        self.set_pos.print(buf, [Param::Int(x), Param::Int(y)])
     }
 }
-pub struct ParaStrCap;
 
-pub struct ParsedStringCap<'buf>(Box<dyn Fn(&mut VirtSeqBuf)>);
+// KNOWN Input Type and size
+//
+//FIXME P1 Size EXPR check u8::MAX
+pub struct ParsedStringCap<const N: usize> {
+    ops: usize,
+    data: usize,
+}
 
-impl<'buf> ParsedStringCap<'buf> {
+impl<const N: usize> ParsedStringCap<N> {
     const OP_STACK_SIZE: usize = 16;
-    fn parse<F>(
+    fn parse_out(
+        buf: &mut Vec<u8>,
         str: &[u8],
-        inputs: &[(u8, ExprType)],
-    ) -> Result<Box<dyn Fn(&mut VirtSeqBuf, F)>, ParseError> {
-        let mut stack: Stack<usize, { Self::OP_STACK_SIZE }> = Stack::new();
+        inputs: [(u8, ExprType); N],
+    ) -> Result<ParsedStringCap<N>, ParseError>
+    where
+        [(); Self::OP_STACK_SIZE]:,
+    {
+        let mut stack: Stack<u8, { Self::OP_STACK_SIZE }> = Stack::new();
         let mut params: Vec<Var> = Vec::new();
         let mut expr: Vec<Expr> = Vec::new();
         let mut print: Vec<Print> = Vec::new();
@@ -119,10 +160,10 @@ impl<'buf> ParsedStringCap<'buf> {
                                 });
                             let exp = Expr {
                                 expr_type: params[param].expr_type,
-                                exprs: ExprEnum::Ground(param),
+                                exprs: ExprEnum::Ground(param as u8),
                             };
                             if one.is_some() && (id == 1 || id == 2) {
-                                let i = expr.len();
+                                let i = expr.len() as u8;
                                 //FIXME Check for Int
                                 expr.push(exp);
                                 Expr {
@@ -161,30 +202,27 @@ impl<'buf> ParsedStringCap<'buf> {
                         }
                     }
                     b'A' => {
-                        let opr =
-                            Self::get_exprs::<2>(&mut stack, &expr, ExprType::BoolMAYBE).unwrap();
+                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Bool).unwrap();
 
                         Expr {
                             exprs: ExprEnum::CondAnd((opr[0], opr[1])),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'!' => {
-                        let opr =
-                            Self::get_exprs::<1>(&mut stack, &expr, ExprType::BoolMAYBE).unwrap();
+                        let opr = Self::get_exprs::<1>(&mut stack, &expr, ExprType::Bool).unwrap();
 
                         Expr {
                             exprs: ExprEnum::CondNot(opr[0]),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'O' => {
-                        let opr =
-                            Self::get_exprs::<2>(&mut stack, &expr, ExprType::BoolMAYBE).unwrap();
+                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Bool).unwrap();
 
                         Expr {
                             exprs: ExprEnum::CondOr((opr[0], opr[1])),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'/' => {
@@ -200,11 +238,11 @@ impl<'buf> ParsedStringCap<'buf> {
 
                         Expr {
                             exprs: ExprEnum::CondAnd((opr[0], opr[1])),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'i' => {
-                        one = Some(expr.len());
+                        one = Some(expr.len() as u8);
                         expr.push(Expr {
                             exprs: ExprEnum::Const(1),
                             expr_type: ExprType::Int,
@@ -216,7 +254,7 @@ impl<'buf> ParsedStringCap<'buf> {
 
                         Expr {
                             exprs: ExprEnum::LargerThen((opr[0], opr[1])),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'm' => {
@@ -248,7 +286,7 @@ impl<'buf> ParsedStringCap<'buf> {
 
                         Expr {
                             exprs: ExprEnum::SmallerThen((opr[0], opr[1])),
-                            expr_type: ExprType::BoolMAYBE,
+                            expr_type: ExprType::Bool,
                         }
                     }
                     b'l' => {
@@ -300,7 +338,7 @@ impl<'buf> ParsedStringCap<'buf> {
                             b'x' => Print::PrintHex(
                                 Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
                             ),
-                            b'X' => Print::PrintLHex(
+                            b'X' => Print::PrintBHex(
                                 Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
                             ),
                             b's' => Print::PrintStr(
@@ -316,34 +354,90 @@ impl<'buf> ParsedStringCap<'buf> {
                         continue;
                     }
                 };
-                stack.push(expr.len());
+                stack.push(expr.len() as u8);
                 expr.push(exp);
             } else {
                 print.push(Print::Byte(char))
             };
         }
+
         if stack.len() != 0 {
             println!("{stack:?}");
             return Err(ParseError::NotEmptyStack);
         }
-        // FIXME Add Static check
-        Ok(Box::new(|bufs: &mut VirtSeqBuf, params: F| {
-            for print_thing in print {
-                match print_thing {
-                    Print::Byte(byte) => bufs.add_char(byte),
-                    Print::PrintDec(dec) => {
-                        let num = expr[dec].eval();
-                        match bufs.format_num(num) {
-                            Ok(_) => continue,
-                            Err(_) => {
-                                bufs.flush();
-                                bufs.format_num(num).unwrap()
+
+        let data = buf.len();
+
+        let mut print_i = 0;
+        let mut print_i2;
+        let mut print_top = 0;
+        let mut changed = false;
+
+        while print_i != print.len() {
+            match print[print_i] {
+                Print::Byte(byte1) => {
+                    print_i2 = print_i + 1;
+                    if matches!(print[print_i2], Print::Byte(_)) {
+                        changed = true;
+                        buf.push(byte1);
+                    } else {
+                        if changed {
+                            print[print_top] = print[print_i];
+                        }
+                        print_i += 1;
+                        print_top += 1;
+                    }
+                    loop {
+                        match print[print_i2] {
+                            Print::Byte(byte) => {
+                                buf.push(byte);
+                                print_i2 += 1;
+                            }
+                            _ => {
+                                print[print_top] = Print::Slice((print_i2 - print_i) as u8);
+                                print_i = print_i2;
+                                print_top += 1;
+                                continue;
                             }
                         }
                     }
                 }
+                _ => {
+                    if changed {
+                        print[print_top] = print[print_i];
+                    }
+                    print_i += 1;
+                    print_top += 1;
+                }
             }
-        }))
+        }
+        unsafe { print.set_len(print_top) };
+
+        buf.align_to_t::<Print>();
+        let ops = buf.len();
+        buf.reserve(ops + print.len() * size_of::<Print>());
+        unsafe { buf.set_len(ops + print.len() * size_of()) };
+        let slice: &mut [Print] = &mut buf[ops])) as &mut [u8] as *mut () as &mut [Print];
+
+        // FIXME Add Static check
+        Ok(ParsedStringCap { ops, data })
+    }
+    pub fn print<F>(&self, buf: &mut VirtSeqBuf, params: F) -> std::io::Result<()> {
+        let mut data = SeqBuf::new(self.data);
+        for print_thing in self.ops {
+            match print_thing {
+                Print::Byte(byte) => buf.write_byte(*byte)?,
+                Print::Slice(slice_len) => {
+                    buf.write(data.get_next(*slice_len as usize).unwrap())?
+                }
+                Print::PrintDec(_) => {
+                    let num: u16 = data.get_next_aligned_t::<Expr>(1).unwrap()[0].eval();
+                    buf.format_num(num)?;
+                }
+                _ => unimplemented!(),
+            }
+        }
+        Ok(())
     }
     fn get_param(
         params: &mut Vec<Var>,
@@ -371,16 +465,16 @@ impl<'buf> ParsedStringCap<'buf> {
         })
     }
     // FIXME P! Type BACKpatching
-    fn get_exprs<const N: usize>(
-        stack: &mut Stack<usize, { Self::OP_STACK_SIZE }>,
+    fn get_exprs<const C: usize>(
+        stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
         exprs: &Vec<Expr>,
         type_filter: ExprType,
-    ) -> Result<[usize; N], ParseError> {
-        if stack.len() >= N {
+    ) -> Result<[u8; C], ParseError> {
+        if stack.len() >= C {
             let res = array::from_fn(|_| stack.pop().unwrap());
             for elem in res.iter() {
-                if !(exprs[*elem].expr_type == ExprType::Unknown
-                    || exprs[*elem].expr_type == type_filter)
+                if !(exprs[*elem as usize].expr_type == ExprType::Unknown
+                    || exprs[*elem as usize].expr_type == type_filter)
                 {
                     return Err(ParseError::WrongType);
                 }
@@ -392,9 +486,9 @@ impl<'buf> ParsedStringCap<'buf> {
     }
     // FIXME P2
     fn get_cmp_exprs(
-        stack: &mut Stack<usize, { Self::OP_STACK_SIZE }>,
+        stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
         exprs: &Vec<Expr>,
-    ) -> Result<[usize; 2], ParseError> {
+    ) -> Result<[u8; 2], ParseError> {
         todo!();
         if stack.len() >= 2 {
             let res = array::from_fn(|_| stack.pop().unwrap());
@@ -416,35 +510,37 @@ struct Expr {
 impl Expr {
     pub fn eval(&self) {
         //Rec?
-        match self
+        match self {
+            _ => (),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum ExprEnum {
     //Num
-    Add((usize, usize)), // +
-    Sub((usize, usize)), // -
-    Mul((usize, usize)), // *
-    Div((usize, usize)), // /
-    Mod((usize, usize)), // m
-    And((usize, usize)), // &
-    Or((usize, usize)),  // |
-    Xor((usize, usize)), // ^
+    Add((u8, u8)), // +
+    Sub((u8, u8)), // -
+    Mul((u8, u8)), // *
+    Div((u8, u8)), // /
+    Mod((u8, u8)), // m
+    And((u8, u8)), // &
+    Or((u8, u8)),  // |
+    Xor((u8, u8)), // ^
     //Cond
-    Eq((usize, usize)),          // =
-    LargerThen((usize, usize)),  // >
-    SmallerThen((usize, usize)), // <
+    Eq((u8, u8)),          // =
+    LargerThen((u8, u8)),  // >
+    SmallerThen((u8, u8)), // <
     //Str
-    StrLen(usize), // l
+    StrLen(u8), // l
     //Bool
-    CondOr((usize, usize)),  // O
-    CondAnd((usize, usize)), // A
-    CondNot(usize),          // !
+    CondOr((u8, u8)),  // O
+    CondAnd((u8, u8)), // A
+    CondNot(u8),       // !
     //Branching
-    If(usize), // ?
+    If(u8), // ?
     /// Index into the Params
-    Ground(usize),
+    Ground(u8),
     /// Limited consts to u32
     Const(u32),
 }
@@ -452,13 +548,14 @@ enum ExprEnum {
 #[repr(u8)]
 #[derive(Debug)]
 enum Print {
-    PrintOct(usize),  // Expects a ???? o?
-    PrintHex(usize),  // Expects a i16? x
-    PrintLHex(usize), // Expects a i16? X
-    PrintDec(usize),  // Expects a i16? d
-    PrintStr(usize),  // Expects a *const char? s?
-    PrintChar(usize), // Expects a int
+    PrintOct(u8),  // Expects a ???? o?
+    PrintHex(u8),  // Expects a i16? x
+    PrintBHex(u8), // Expects a i16? X
+    PrintDec(u8),  // Expects a i16? d
+    PrintStr(u8),  // Expects a *const char? s?
+    PrintChar(u8), // Expects a int
     Byte(u8),
+    Slice(u8), // Lenght
 }
 
 /// Param id is (0..9)

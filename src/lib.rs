@@ -14,7 +14,7 @@ use crate::stdio::StdIo;
 
 mod stuff;
 
-pub use stuff::SeqBuf;
+pub use stuff::{/*AlignedPop,*/ AlignedPush, SeqBuf, Stack};
 
 pub mod stdio;
 

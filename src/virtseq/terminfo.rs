@@ -99,7 +99,7 @@ impl TermInfo<'_> {
 
         let mut file_ref = SeqBuf::new(file.into_boxed_slice());
 
-        let header = match file_ref.get_first_to_t::<Header>(1) {
+        let header = match file_ref.get_next_t::<Header>(1) {
             Some(header) => &header[0],
             None => return Err(ParseError::NoHeader),
         };
@@ -109,7 +109,7 @@ impl TermInfo<'_> {
         }
 
         // FIXME Add BIG Endianess
-        let names = match file_ref.get_first(header.name_size as usize) {
+        let names = match file_ref.get_next(header.name_size as usize) {
             Some(names) => {
                 let cstr = match CStr::from_bytes_with_nul(names) {
                     Ok(str) => str,
@@ -128,7 +128,7 @@ impl TermInfo<'_> {
 
         if file_ref.base().mask(1) as usize != 0
             && file_ref
-                .get_first(1)
+                .get_next(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
                 .is_none()
         {
@@ -203,14 +203,14 @@ impl TermInfoExt<'_> {
     ) -> Result<TermInfoExt<'file>, ParseError> {
         if buf.base().mask(1) as usize != 0
             && buf
-                .get_first(1)
+                .get_next(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
                 .is_none()
         {
             return Err(ParseError::NoPadding);
         }
 
-        let ext_header = match buf.get_first_to_t::<ExtHeader>(1) {
+        let ext_header = match buf.get_next_t::<ExtHeader>(1) {
             Some(head) => &head[0],
             None => return Err(ParseError::NoExtHeader),
         };
@@ -227,7 +227,7 @@ impl TermInfoExt<'_> {
 
         if buf.base().mask(1) as usize != 0
             && buf
-                .get_first(1)
+                .get_next(1)
                 .map(|val| if val[0] == 0 { Some(()) } else { None })
                 .is_none()
         {
@@ -361,7 +361,7 @@ impl FormatnInts<'_> {
     ) -> Result<FormatnInts<'file>, ParseError> {
         Ok(match version {
             TermInfoVersion::Legacy => {
-                FormatnInts::Legacy(match buf.get_first_to_t::<TermInfoInt>(count as usize) {
+                FormatnInts::Legacy(match buf.get_next_t::<TermInfoInt>(count as usize) {
                     Some(ints) => {
                         for int in ints {
                             if *int < -2 {
@@ -384,7 +384,7 @@ impl FormatnInts<'_> {
                 })
             }
             TermInfoVersion::Extended => {
-                FormatnInts::Extended(match buf.get_first_to_t::<TermInfoExtInt>(count as usize) {
+                FormatnInts::Extended(match buf.get_next_t::<TermInfoExtInt>(count as usize) {
                     Some(ints) => {
                         for slice in ints {
                             let int = i32::from_le_bytes(*slice);
@@ -439,7 +439,7 @@ impl TermInfoString<'_> {
             Vec::new()
         };
 
-        let str_offs = match buf.get_first_to_t::<i16>(str_count) {
+        let str_offs = match buf.get_next_t::<i16>(str_count) {
             Some(offs) => offs,
             None => {
                 if EXT {
@@ -451,7 +451,7 @@ impl TermInfoString<'_> {
         };
 
         let name_offs = if EXT {
-            Some(match buf.get_first_to_t::<i16>(name_count.unwrap()) {
+            Some(match buf.get_next_t::<i16>(name_count.unwrap()) {
                 Some(name_offs) => name_offs,
                 None => return Err(ParseError::NoExtNameOffs),
             })
@@ -463,7 +463,7 @@ impl TermInfoString<'_> {
             return Ok((str_table, name_table));
         }
 
-        let mut string_table = match buf.get_first(str_table_size) {
+        let mut string_table = match buf.get_next(str_table_size) {
             Some(str_table) => str_table,
             None => {
                 if EXT {
@@ -625,7 +625,7 @@ impl TermInfoBool {
         buf: &mut SeqBuf,
         count: i16,
     ) -> Result<&'file [TermInfoBool], ParseError> {
-        match buf.get_first_to_t::<TermInfoBool>(count as usize) {
+        match buf.get_next_t::<TermInfoBool>(count as usize) {
             Some(slice) => {
                 for bool in slice {
                     if !bool.valid() {
