@@ -302,6 +302,68 @@ impl SeqBuf {
     }
 }
 
+pub struct SeqSlice<'a> {
+    buf: &'a Box<[u8]>,
+    base: *const u8,
+    len: usize,
+}
+
+impl<'a> SeqSlice<'a> {
+    pub fn new(buf: &Box<[u8]>) -> SeqSlice {
+        SeqSlice {
+            base: buf.as_ptr(),
+            len: buf.len(),
+            buf,
+        }
+    }
+    pub fn get_next<'ret>(&mut self, block_len: usize) -> Option<&'ret [u8]> {
+        if self.len >= block_len {
+            let ptr = self.base;
+            self.len -= block_len;
+            self.base = unsafe { self.base.add(block_len) };
+            Some(unsafe { slice::from_raw_parts(ptr, block_len) })
+        } else {
+            None
+        }
+    }
+    pub fn get_next_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
+        let real_len = block_len * size_of::<T>();
+        if self.len >= real_len {
+            let ptr = self.base;
+            self.len -= real_len;
+            self.base = unsafe { self.base.add(real_len) };
+            Some(unsafe { slice::from_raw_parts(ptr as *const T, block_len) })
+        } else {
+            None
+        }
+    }
+    pub fn get_next_aligned_t<'ret, T>(&mut self, block_len: usize) -> Option<&'ret [T]> {
+        let alignment = align_of::<T>() as isize;
+
+        let offset = ((-(self.base as isize)) & (alignment - 1)) as usize;
+        let real_len = block_len * size_of::<T>();
+
+        if self.len >= real_len + offset {
+            unsafe { self.base.add(offset) };
+            let ptr = self.base;
+            self.len -= real_len + offset;
+            self.base = unsafe { self.base.add(real_len) };
+            Some(unsafe { slice::from_raw_parts(ptr as *const T, block_len) })
+        } else {
+            None
+        }
+    }
+    pub fn base(&self) -> *const u8 {
+        self.base
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn end(self) -> Option<()> {
+        if self.len == 0 { Some(()) } else { None }
+    }
+}
+
 pub trait AlignedPush {
     fn align_to_t<T>(&mut self);
     fn push_aligned<T>(&mut self, value: T);
@@ -398,5 +460,29 @@ impl<T: Copy, const N: usize> Stack<T, N> {
         } else {
             None
         }
+    }
+}
+
+pub trait CopyT {
+    fn copy_t_aligned<T: Copy>(&mut self, slice: Vec<T>) -> usize;
+}
+
+impl CopyT for Vec<u8> {
+    fn copy_t_aligned<T: Copy>(&mut self, slice: Vec<T>) -> usize {
+        self.align_to_t::<T>();
+        let base = self.len();
+
+        let slice_len = slice.len() * size_of::<T>();
+
+        self.reserve(slice_len);
+        unsafe { self.set_len(base + slice_len) };
+
+        let s = unsafe {
+            slice::from_raw_parts_mut((&mut self[base]) as *mut u8 as *mut T, slice.len())
+        };
+
+        s.copy_from_slice(&slice);
+
+        return base;
     }
 }

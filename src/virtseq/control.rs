@@ -1,8 +1,10 @@
 use std::array;
 
-use libc::KERN_PRINTK_RATELIMIT;
-
-use crate::{AlignedPush, SeqBuf, Stack, idx_name, virtseq::ParseError};
+use crate::{
+    SeqBuf, Stack, idx_name,
+    stuff::{CopyT, SeqSlice},
+    virtseq::ParseError,
+};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
 
@@ -20,7 +22,7 @@ pub struct TermInfoConfig<'me> {
     clear: &'me [u8],
     get_pos_res: &'me [u8],
     get_pos_req: &'me [u8],
-    set_pos: ParsedStringCap<'me, 2>,
+    set_pos: ParsedStringCap<2>,
 }
 
 macro_rules! get_strs {(
@@ -53,7 +55,7 @@ macro_rules! get_strs {(
             let str = $entry.get_str(idx_name!(STRING, $name));
             match *str.unwrap() {
                 TermInfoString::There(slice) => {
-                    ParsedStringCap::<{$io.len()}>::parse_out(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io as &[(u8, ExprType)]).unwrap()
+                    ParsedStringCap::<{$io.len()}>::parse_out(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io).unwrap()
                 }
                 _=>return Err(())
             }
@@ -81,7 +83,7 @@ impl TermInfoConfig<'_> {
             clear, "clear_screen";
             get_pos_res, "user6";
             get_pos_req, "user7";
-            set_pos, "cursor_address", out, &[(0u8, ExprType::Int),(1u8, ExprType::Int)];
+            set_pos, "cursor_address", out, [(0u8, ExprType::Int),(1u8, ExprType::Int)];
         );
 
         let mut buf = SeqBuf::new(buf.into_boxed_slice());
@@ -107,16 +109,25 @@ impl TermControl for TermInfoConfig<'_> {
         buf.write(self.get_pos_req)
     }
     fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Self::Result<()> {
-        self.set_pos.print(buf, [Param::Int(x), Param::Int(y)])
+        self.set_pos
+            .print(&self.buf, buf, [Param::Int(x), Param::Int(y)])
     }
+}
+
+enum PState {
+    None,
+    Byte,
+    Slice,
 }
 
 // KNOWN Input Type and size
 //
 //FIXME P1 Size EXPR check u8::MAX
 pub struct ParsedStringCap<const N: usize> {
-    ops: usize,
-    data: usize,
+    base: usize,
+    data_len: usize,
+    print_len: usize,
+    expr_len: usize,
 }
 
 impl<const N: usize> ParsedStringCap<N> {
@@ -134,6 +145,8 @@ impl<const N: usize> ParsedStringCap<N> {
         let mut expr: Vec<Expr> = Vec::new();
         let mut print: Vec<Print> = Vec::new();
 
+        let base = buf.len();
+        let mut state = PState::None;
         let mut one = None;
         let mut bytes = str.iter();
         let mut char;
@@ -144,6 +157,7 @@ impl<const N: usize> ParsedStringCap<N> {
                 None => break,
             };
             if char == b'%' {
+                state = PState::None;
                 char = *bytes.next().ok_or(ParseError::IncompleteMod).unwrap();
                 let exp = match char {
                     b'p' => {
@@ -357,7 +371,28 @@ impl<const N: usize> ParsedStringCap<N> {
                 stack.push(expr.len() as u8);
                 expr.push(exp);
             } else {
-                print.push(Print::Byte(char))
+                match state {
+                    PState::None => {
+                        print.push(Print::Byte(char));
+                        state = PState::Byte;
+                    }
+                    PState::Byte => {
+                        let value = print.last_mut().unwrap();
+                        if let Print::Byte(byte) = value {
+                            buf.push(*byte);
+                            buf.push(char);
+                            *value = Print::Slice(2);
+                            state = PState::Slice;
+                        };
+                    }
+                    PState::Slice => {
+                        let value = print.last_mut().unwrap();
+                        if let Print::Slice(len) = value {
+                            *value = Print::Slice(*len + 1);
+                            buf.push(char);
+                        }
+                    }
+                }
             };
         }
 
@@ -366,65 +401,28 @@ impl<const N: usize> ParsedStringCap<N> {
             return Err(ParseError::NotEmptyStack);
         }
 
-        let data = buf.len();
+        let print_base = buf.copy_t_aligned(print);
 
-        let mut print_i = 0;
-        let mut print_i2;
-        let mut print_top = 0;
-        let mut changed = false;
-
-        while print_i != print.len() {
-            match print[print_i] {
-                Print::Byte(byte1) => {
-                    print_i2 = print_i + 1;
-                    if matches!(print[print_i2], Print::Byte(_)) {
-                        changed = true;
-                        buf.push(byte1);
-                    } else {
-                        if changed {
-                            print[print_top] = print[print_i];
-                        }
-                        print_i += 1;
-                        print_top += 1;
-                    }
-                    loop {
-                        match print[print_i2] {
-                            Print::Byte(byte) => {
-                                buf.push(byte);
-                                print_i2 += 1;
-                            }
-                            _ => {
-                                print[print_top] = Print::Slice((print_i2 - print_i) as u8);
-                                print_i = print_i2;
-                                print_top += 1;
-                                continue;
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    if changed {
-                        print[print_top] = print[print_i];
-                    }
-                    print_i += 1;
-                    print_top += 1;
-                }
-            }
-        }
-        unsafe { print.set_len(print_top) };
-
-        buf.align_to_t::<Print>();
-        let ops = buf.len();
-        buf.reserve(ops + print.len() * size_of::<Print>());
-        unsafe { buf.set_len(ops + print.len() * size_of()) };
-        let slice: &mut [Print] = &mut buf[ops])) as &mut [u8] as *mut () as &mut [Print];
-
-        // FIXME Add Static check
-        Ok(ParsedStringCap { ops, data })
+        Ok(ParsedStringCap {
+            data_len: print_base - base,
+            print_len: expr_base - print_base,
+            expr_len: buf.len() - expr_base,
+            base,
+        })
     }
-    pub fn print<F>(&self, buf: &mut VirtSeqBuf, params: F) -> std::io::Result<()> {
-        let mut data = SeqBuf::new(self.data);
-        for print_thing in self.ops {
+    pub fn print<F>(
+        &self,
+        data: &Box<[u8]>,
+        buf: &mut VirtSeqBuf,
+        params: F,
+    ) -> std::io::Result<()> {
+        let mut data = SeqSlice::new(data);
+        _ = data.get_next(self.base);
+        let bytes: &[u8] = data.get_next(self.data_len).unwrap();
+        let print: &[Print] = data.get_next_aligned_t(self.print_len).unwrap();
+        let expr: &[Expr] = data.get_next_aligned_t(self.expr_len).unwrap();
+
+        for print_thing in print {
             match print_thing {
                 Print::Byte(byte) => buf.write_byte(*byte)?,
                 Print::Slice(slice_len) => {
@@ -486,18 +484,18 @@ impl<const N: usize> ParsedStringCap<N> {
     }
     // FIXME P2
     fn get_cmp_exprs(
-        stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
-        exprs: &Vec<Expr>,
+        _stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
+        _exprs: &Vec<Expr>,
     ) -> Result<[u8; 2], ParseError> {
         todo!();
-        if stack.len() >= 2 {
-            let res = array::from_fn(|_| stack.pop().unwrap());
-            let t = ExprType::Unknown;
-            for elem in res.iter() {}
-            Ok(res)
-        } else {
-            return Err(ParseError::Debug);
-        }
+        // if stack.len() >= 2 {
+        //     let res = array::from_fn(|_| stack.pop().unwrap());
+        //     let t = ExprType::Unknown;
+        //     for elem in res.iter() {}
+        //     Ok(res)
+        // } else {
+        //     return Err(ParseError::Debug);
+        // }
     }
 }
 
@@ -546,7 +544,7 @@ enum ExprEnum {
 }
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum Print {
     PrintOct(u8),  // Expects a ???? o?
     PrintHex(u8),  // Expects a i16? x

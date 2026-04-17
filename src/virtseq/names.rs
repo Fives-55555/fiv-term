@@ -348,8 +348,7 @@ pub const STRING_NAMES: [(&'static str, &'static str, &'static str); 414] = [
     ("set_right_margin", "smgr", "MR"),
     ("label_format", "fln", "Lf"),
     ("set_clock", "sclk", "SC"),
-    ("display_clock",                     idx += (*slice_len) as usize;
-"dclk", "DK"),
+    ("display_clock", "dclk", "DK"),
     ("remove_clock", "rmclk", "RC"),
     ("create_window", "cwin", "CW"),
     ("goto_window", "wingo", "WG"),
@@ -391,8 +390,12 @@ pub const STRING_NAMES: [(&'static str, &'static str, &'static str); 414] = [
     ("enter_near_letter_quality", "snlq", "ZK"),
     ("enter_normal_quality", "snrmq", "ZL"),
     ("enter_shadow_mode", "sshm", "ZM"),
-    ("enter_subscript_                    idx += (*slice_len) as usize;
-mode", "ssubm", "ZN"),
+    (
+        "enter_subscript_                    idx += (*slice_len) as usize;
+mode",
+        "ssubm",
+        "ZN",
+    ),
     ("enter_superscript_mode", "ssupm", "ZO"),
     ("enter_upward_mode", "sum", "ZP"),
     ("exit_doublewide_mode", "rwidm", "ZQ"),
