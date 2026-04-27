@@ -452,7 +452,12 @@ impl<const N: usize> ParsedStringCap<N> {
                             (OpCode::Mod, i16::wrapping_rem, int, int),
                             (OpCode::BitAnd, i16::bitand, int, int),
                             (OpCode::BitOr, i16::bitor, int, int),
-                            (OpCode::BitXor, i16::bitxor, int, int)
+                            (OpCode::BitXor, i16::bitxor, int, int),
+                            (OpCode::CondAnd, |a, b| a && b, bool, bool),
+                            (OpCode::CondOr, |a, b| a || b, bool, bool),
+                            (OpCode::CondXor, |a, b| a ^ b, bool, bool),
+                            (OpCode::CondLargerThen, i16::gt, int, int),
+                            (OpCode::CondSmallerThen, i16::lt, int, int)
                         )
                     );
                 }
