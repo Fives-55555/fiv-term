@@ -18,7 +18,7 @@ impl VirtSeqBuf {
             min_flush_size: Self::MIN_FLUSH_SIZE,
         }
     }
-    pub fn format_num(&mut self, num: u16) -> std::io::Result<()> {
+    pub fn format_num(&mut self, num: i16) -> std::io::Result<()> {
         let mut buf = match NumberBuffer::try_from(&mut self.buf[self.idx..]) {
             Ok(buf) => buf,
             Err(_) => {

@@ -282,7 +282,7 @@ impl SeqBuf {
         let real_len = block_len * size_of::<T>();
 
         if self.len >= real_len + offset {
-            unsafe { self.base.add(offset) };
+            self.base = unsafe { self.base.add(offset) };
             let ptr = self.base;
             self.len -= real_len + offset;
             self.base = unsafe { self.base.add(real_len) };
@@ -309,7 +309,7 @@ pub struct SeqSlice<'a> {
 }
 
 impl<'a> SeqSlice<'a> {
-    pub fn new(buf: &Box<[u8]>) -> SeqSlice {
+    pub fn new(buf: &'a Box<[u8]>) -> SeqSlice<'a> {
         SeqSlice {
             base: buf.as_ptr(),
             len: buf.len(),
@@ -344,7 +344,7 @@ impl<'a> SeqSlice<'a> {
         let real_len = block_len * size_of::<T>();
 
         if self.len >= real_len + offset {
-            unsafe { self.base.add(offset) };
+            self.base = unsafe { self.base.add(offset) };
             let ptr = self.base;
             self.len -= real_len + offset;
             self.base = unsafe { self.base.add(real_len) };
@@ -372,6 +372,10 @@ pub trait AlignedPush {
 impl AlignedPush for Vec<u8> {
     fn align_to_t<T>(&mut self) {
         let alignment = align_of::<T>() as isize;
+
+        if alignment == 1 {
+            return;
+        }
 
         let ptr = self.as_ptr() as isize + self.len() as isize;
         let offset = ((-ptr) & (alignment - 1)) as usize;
@@ -449,7 +453,16 @@ impl<T: Copy, const N: usize> Stack<T, N> {
     pub fn len(&self) -> usize {
         self.head
     }
-    pub fn push(&mut self, value: T) {
+    pub fn push(&mut self, value: T) -> Option<()> {
+        if self.head < N {
+            self.stack[self.head].write(value);
+            self.head += 1;
+            Some(())
+        } else {
+            None
+        }
+    }
+    pub fn push_unchecked(&mut self, value: T) {
         self.stack[self.head].write(value);
         self.head += 1;
     }
@@ -457,6 +470,20 @@ impl<T: Copy, const N: usize> Stack<T, N> {
         if self.head != 0 {
             self.head -= 1;
             Some(unsafe { self.stack[self.head].assume_init() })
+        } else {
+            None
+        }
+    }
+    pub unsafe fn slice_last(&mut self, len: usize) -> Option<&[T]> {
+        if len <= self.len() {
+            Some(unsafe { self.stack[self.head - len..self.head].assume_init_ref() })
+        } else {
+            None
+        }
+    }
+    pub unsafe fn mut_slice_last(&mut self, len: usize) -> Option<&mut [T]> {
+        if len <= self.len() {
+            Some(unsafe { self.stack[self.head - len..self.head].assume_init_mut() })
         } else {
             None
         }

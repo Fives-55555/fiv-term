@@ -69,7 +69,8 @@ pub enum ParseError {
     // String Parser
     IncompleteMod,
     IncompleteParam,
-    InvalidParam,
+    UnusedParam,
+    InvalidId,
     WrongType,
     EmptyStack,
     InvalidMod,

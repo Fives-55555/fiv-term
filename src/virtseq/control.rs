@@ -1,10 +1,10 @@
-use std::array;
-
 use crate::{
     SeqBuf, Stack, idx_name,
     stuff::{CopyT, SeqSlice},
     virtseq::ParseError,
 };
+
+use std::ops::{BitAnd, BitOr, BitXor};
 
 use super::{TermInfo, TermInfoString, VirtSeqBuf};
 
@@ -114,6 +114,31 @@ impl TermControl for TermInfoConfig<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Param<'a> {
+    Str(&'a str),
+    Int(i16),
+    Bool(bool),
+}
+
+impl<'a> Param<'a> {
+    fn to_var(self) -> Variable<'a> {
+        match self {
+            Param::Str(str) => Variable { str },
+            Param::Int(int) => Variable { int },
+            Param::Bool(bool) => Variable { bool },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+union Variable<'a> {
+    str: &'a str,
+    int: i16,
+    bool: bool,
+}
+
+#[repr(u8)]
 enum PState {
     None,
     Byte,
@@ -121,15 +146,70 @@ enum PState {
 }
 
 // KNOWN Input Type and size
-//
-//FIXME P1 Size EXPR check u8::MAX
 pub struct ParsedStringCap<const N: usize> {
     base: usize,
-    data_len: usize,
-    print_len: usize,
-    expr_len: usize,
+    slice_len: usize,
+    op_len: usize,
 }
 
+macro_rules! parse_n_check {
+    (
+        $char:expr,
+        $ops:expr,
+        $stack:expr,
+        (
+            $(($filter:expr, $code:expr, $ret_type:expr, $argc:expr, $type_filter:expr)),*
+        ),
+        (
+            $(($print_filter:expr, $print_code:expr, $print_type_filter:expr)),*
+        )
+    )=>{
+        match $char {
+
+            $($filter => {
+                Self::get_exprs::<$argc, _>(&mut $stack, $type_filter)
+                .unwrap();
+                ($code, $ret_type)
+            })*
+            _=>{
+                $ops.push(match $char {
+                    $(
+                        $print_filter=>{
+                            Self::get_exprs::<1, _>(&mut $stack, $print_type_filter).unwrap();
+                            $print_code
+                        }
+                    )*
+                    _ => return Err(ParseError::InvalidMod),
+                });
+                continue;
+            }
+        }
+    };
+}
+
+macro_rules! switch_and_exec {
+    (
+        $op:expr,
+        $stack:expr,
+        (
+            $(
+                ($code:pat, $func:expr, $in_type:ident, $type:ident)
+            ),*
+        )
+    ) => {
+        match $op {
+            $($code => {
+                let lhs = $stack.pop().unwrap();
+                let rhs = &mut unsafe {$stack.mut_slice_last(1).unwrap()[0]};
+                *rhs = Variable {$type: $func(unsafe {lhs.$in_type}, unsafe {rhs.$in_type})};
+            })*
+            _ => unimplemented!(),
+        }
+    };
+}
+
+// FIXME P2 Remove unwraps
+// FIXME Feature add OPs for strs
 impl<const N: usize> ParsedStringCap<N> {
     const OP_STACK_SIZE: usize = 16;
     fn parse_out(
@@ -140,16 +220,18 @@ impl<const N: usize> ParsedStringCap<N> {
     where
         [(); Self::OP_STACK_SIZE]:,
     {
-        let mut stack: Stack<u8, { Self::OP_STACK_SIZE }> = Stack::new();
-        let mut params: Vec<Var> = Vec::new();
-        let mut expr: Vec<Expr> = Vec::new();
-        let mut print: Vec<Print> = Vec::new();
+        let mut stack: Stack<ExprType, { Self::OP_STACK_SIZE }> = Stack::new();
+        let mut ops: Vec<OpCode> = Vec::new();
+        // FIXME CHeck for right use
+        let mut used: u16 = 0;
 
         let base = buf.len();
         let mut state = PState::None;
-        let mut one = None;
+
+        let mut one = false;
+
         let mut bytes = str.iter();
-        let mut char;
+        let mut char: u8;
 
         loop {
             char = match bytes.next() {
@@ -159,238 +241,130 @@ impl<const N: usize> ParsedStringCap<N> {
             if char == b'%' {
                 state = PState::None;
                 char = *bytes.next().ok_or(ParseError::IncompleteMod).unwrap();
-                let exp = match char {
+                let op: (OpCode, ExprType) = match char {
+                    b'?' => return Err(ParseError::MissingFeatureIf),
+                    b'%' => {
+                        OpCode::push_byte(&mut ops, char);
+                        continue;
+                    }
                     b'p' => {
                         char = *bytes.next().ok_or(ParseError::IncompleteParam).unwrap();
                         if char >= b'1' && char <= b'9' {
                             let id = char - b'1';
-                            let param =
-                                params.iter().position(|p| p.id == id).unwrap_or_else(|| {
-                                    params.push(Var {
-                                        id,
-                                        expr_type: ExprType::Unknown,
-                                    });
-                                    params.len() - 1
-                                });
-                            let exp = Expr {
-                                expr_type: params[param].expr_type,
-                                exprs: ExprEnum::Ground(param as u8),
-                            };
-                            if one.is_some() && (id == 1 || id == 2) {
-                                let i = expr.len() as u8;
-                                //FIXME Check for Int
-                                expr.push(exp);
-                                Expr {
-                                    expr_type: ExprType::Int,
-                                    exprs: ExprEnum::Add((i, one.unwrap())),
-                                }
-                            } else {
-                                exp
+                            let idx = inputs
+                                .iter()
+                                .position(|p| p.0 == id)
+                                .ok_or(ParseError::InvalidId)
+                                .unwrap();
+                            used |= 1 << idx;
+                            stack.push(inputs[idx].1);
+                            OpCode::push_p(&mut ops, idx as u8);
+                            if one && (id == 1 || id == 2) {
+                                ops.push(OpCode::AddOne);
                             }
                         } else {
-                            return Err(ParseError::InvalidParam);
+                            return Err(ParseError::InvalidId);
                         }
-                    }
-                    b'[' => match bytes.find(|x| **x == b']') {
-                        Some(_) => return Err(ParseError::MissingFeatureMatch),
-                        None => return Err(ParseError::InvalidInputMatch),
-                    },
-                    b'{' => match bytes.find(|x| **x == b'}') {
-                        Some(_) => return Err(ParseError::MissingFeatureConsts),
-                        None => return Err(ParseError::InvalidConsts),
-                    },
-                    b'+' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Add((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'&' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::And((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'A' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Bool).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::CondAnd((opr[0], opr[1])),
-                            expr_type: ExprType::Bool,
-                        }
-                    }
-                    b'!' => {
-                        let opr = Self::get_exprs::<1>(&mut stack, &expr, ExprType::Bool).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::CondNot(opr[0]),
-                            expr_type: ExprType::Bool,
-                        }
-                    }
-                    b'O' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Bool).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::CondOr((opr[0], opr[1])),
-                            expr_type: ExprType::Bool,
-                        }
-                    }
-                    b'/' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Div((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'=' => {
-                        let opr = Self::get_cmp_exprs(&mut stack, &expr).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::CondAnd((opr[0], opr[1])),
-                            expr_type: ExprType::Bool,
-                        }
-                    }
-                    b'i' => {
-                        one = Some(expr.len() as u8);
-                        expr.push(Expr {
-                            exprs: ExprEnum::Const(1),
-                            expr_type: ExprType::Int,
-                        });
                         continue;
                     }
-                    b'>' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::LargerThen((opr[0], opr[1])),
-                            expr_type: ExprType::Bool,
+                    // FIXME IDk
+                    b'[' => match bytes.find(|x| **x == b']') {
+                        Some(_) => todo!(),
+                        None => return Err(ParseError::InvalidInputMatch),
+                    },
+                    b'{' => {
+                        let mut num = [0; 6];
+                        let mut idx = 0;
+                        char = *bytes.next().ok_or(ParseError::IncompleteCharConst).unwrap();
+                        while char != b'}' {
+                            if idx == 6 {
+                                return Err(ParseError::InvalidConsts);
+                            }
+                            num[idx] = char;
+                            idx += 1;
+                            char = *bytes.next().ok_or(ParseError::IncompleteCharConst).unwrap();
                         }
+                        let num = i16::from_ascii(&num[0..idx])
+                            .ok()
+                            .ok_or(ParseError::InvalidConsts)?;
+                        OpCode::push_const(&mut ops, num);
+                        continue;
                     }
-                    b'm' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Mod((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
+                    b'i' => {
+                        one = true;
+                        continue;
                     }
-                    b'*' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Mul((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'|' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Or((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'<' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::SmallerThen((opr[0], opr[1])),
-                            expr_type: ExprType::Bool,
-                        }
-                    }
-                    b'l' => {
-                        let opr =
-                            Self::get_exprs::<1>(&mut stack, &expr, ExprType::String).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::StrLen(opr[0]),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'-' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Sub((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
-                    b'^' => {
-                        let opr = Self::get_exprs::<2>(&mut stack, &expr, ExprType::Int).unwrap();
-
-                        Expr {
-                            exprs: ExprEnum::Xor((opr[0], opr[1])),
-                            expr_type: ExprType::Int,
-                        }
-                    }
+                    // FIXME IDK
                     b'\'' => {
                         let c = *bytes.next().ok_or(ParseError::IncompleteCharConst).unwrap();
                         char = *bytes.next().ok_or(ParseError::IncompleteCharConst).unwrap();
                         if char == b'\'' {
-                            Expr {
-                                exprs: ExprEnum::Const(c as u32),
-                                expr_type: ExprType::Int,
-                            }
+                            OpCode::push_const(&mut ops, c as i16);
+                            stack.push(ExprType::Int);
+                            continue;
                         } else {
                             return Err(ParseError::InvalidCharConst);
                         }
                     }
                     _ => {
-                        print.push(match char {
-                            b'%' => Print::Byte(b'%'),
-                            b'd' => Print::PrintDec(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
+                        #[rustfmt::skip]
+                        parse_n_check!(
+                            char,
+                            ops,
+                            stack,
+                            (
+                                (b'+', OpCode::Add, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'&', OpCode::BitAnd, ExprType::Int, 2, |arr| arr[0]==ExprType::Int && arr[1] == ExprType::Int),
+                                (b'A', OpCode::CondAnd, ExprType::Bool, 2, |arr| arr[0] == ExprType::Bool && arr[1] == ExprType::Bool),
+                                (b'!', OpCode::CondNot, ExprType::Bool, 1, |arr| arr[0] == ExprType::Bool),
+                                (b'O', OpCode::CondOr, ExprType::Bool, 2, |arr| arr[0] == ExprType::Bool && arr[1] == ExprType::Bool),
+                                (b'/', OpCode::Div, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'=', OpCode::CondEq, ExprType::Bool, 2, |_arr| false),
+                                (b'>', OpCode::CondLargerThen, ExprType::Bool, 2, |_arr| false),
+                                (b'm', OpCode::Mod, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'*', OpCode::Mul, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'|', OpCode::BitOr, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'<', OpCode::CondSmallerThen, ExprType::Bool, 2, |_arr| false),
+                                (b'l', OpCode::StrLen, ExprType::Int, 1, |arr| arr[0] == ExprType::String),
+                                (b'-', OpCode::Sub, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
+                                (b'^', OpCode::BitXor, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int)
                             ),
-                            b'o' => Print::PrintOct(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
-                            ),
-                            b'x' => Print::PrintHex(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
-                            ),
-                            b'X' => Print::PrintBHex(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
-                            ),
-                            b's' => Print::PrintStr(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::String).unwrap()
-                                    [0],
-                            ),
-                            b'c' => Print::PrintChar(
-                                Self::get_exprs::<1>(&mut stack, &expr, ExprType::Int).unwrap()[0],
-                            ),
-                            b'?' => return Err(ParseError::MissingFeatureIf),
-                            _ => return Err(ParseError::InvalidMod),
-                        });
-                        continue;
+                            (
+                                (b'd', OpCode::PrintDec, |arr| arr[0] == ExprType::Int),
+                                (b'o', OpCode::PrintOct, |arr| arr[0] == ExprType::Int),
+                                (b'x', OpCode::PrintHex, |arr| arr[0] == ExprType::Int),
+                                (b'X', OpCode::PrintBHex, |arr| arr[0] == ExprType::Int),
+                                (b's', OpCode::PrintStr, |arr| arr[0] == ExprType::String),
+                                (b'c', OpCode::PrintChar, |arr| arr[0] == ExprType::Int)
+                            )
+                        )
                     }
                 };
-                stack.push(expr.len() as u8);
-                expr.push(exp);
+                ops.push(op.0);
+                stack.push(op.1);
             } else {
                 match state {
                     PState::None => {
-                        print.push(Print::Byte(char));
+                        OpCode::push_byte(&mut ops, char);
                         state = PState::Byte;
                     }
                     PState::Byte => {
-                        let value = print.last_mut().unwrap();
-                        if let Print::Byte(byte) = value {
-                            buf.push(*byte);
-                            buf.push(char);
-                            *value = Print::Slice(2);
-                            state = PState::Slice;
-                        };
+                        let idx = ops.len() - 1;
+                        let prev_char = ops[idx] as u8;
+                        ops[idx] = unsafe { std::mem::transmute(2_u8) };
+
+                        ops[idx - 1] = OpCode::PrintSlice;
+
+                        buf.push(prev_char);
+                        buf.push(char);
+
+                        state = PState::Slice;
                     }
                     PState::Slice => {
-                        let value = print.last_mut().unwrap();
-                        if let Print::Slice(len) = value {
-                            *value = Print::Slice(*len + 1);
-                            buf.push(char);
-                        }
+                        let elem = unsafe { ops.last_mut().unwrap_unchecked() };
+                        let val = *elem as u8 + 1;
+                        *elem = unsafe { std::mem::transmute(val) };
+                        buf.push(char);
                     }
                 }
             };
@@ -401,166 +375,174 @@ impl<const N: usize> ParsedStringCap<N> {
             return Err(ParseError::NotEmptyStack);
         }
 
-        let print_base = buf.copy_t_aligned(print);
+        let ops_base = buf.copy_t_aligned(ops);
+
+        if used.count_ones() != N as u32 {
+            return Err(ParseError::UnusedParam);
+        }
 
         Ok(ParsedStringCap {
-            data_len: print_base - base,
-            print_len: expr_base - print_base,
-            expr_len: buf.len() - expr_base,
+            slice_len: ops_base - base,
+            op_len: buf.len() - ops_base,
             base,
         })
     }
-    pub fn print<F>(
+    pub fn print(
         &self,
         data: &Box<[u8]>,
         buf: &mut VirtSeqBuf,
-        params: F,
-    ) -> std::io::Result<()> {
+        params: [Param; N],
+    ) -> std::io::Result<()>
+    where
+        [(); Self::OP_STACK_SIZE]:,
+    {
+        fn pop<T: Copy>(slice: &mut &[T]) -> T {
+            let val = slice[0];
+            *slice = &slice[1..];
+            return val;
+        }
+        fn pop_slices<'a>(slice: &mut &'a [u8], len: usize) -> &'a [u8] {
+            let val = &slice[0..len];
+            *slice = &slice[len..];
+            return val;
+        }
+        let vars = std::array::from_fn::<Variable, N, _>(|idx| params[idx].to_var());
         let mut data = SeqSlice::new(data);
         _ = data.get_next(self.base);
-        let bytes: &[u8] = data.get_next(self.data_len).unwrap();
-        let print: &[Print] = data.get_next_aligned_t(self.print_len).unwrap();
-        let expr: &[Expr] = data.get_next_aligned_t(self.expr_len).unwrap();
+        let mut slices: &[u8] = data.get_next(self.slice_len).unwrap();
+        let mut ops: &[OpCode] = data.get_next_aligned_t(self.op_len).unwrap();
+        let mut stack: Stack<Variable, { Self::OP_STACK_SIZE }> = Stack::new();
 
-        for print_thing in print {
-            match print_thing {
-                Print::Byte(byte) => buf.write_byte(*byte)?,
-                Print::Slice(slice_len) => {
-                    buf.write(data.get_next(*slice_len as usize).unwrap())?
+        while !ops.is_empty() {
+            let op = pop(&mut ops);
+            match op {
+                OpCode::PrintByte => buf.write_byte(pop(&mut ops) as u8)?,
+                OpCode::PrintSlice => {
+                    buf.write(pop_slices(&mut slices, pop(&mut ops) as u8 as usize))?
                 }
-                Print::PrintDec(_) => {
-                    let num: u16 = data.get_next_aligned_t::<Expr>(1).unwrap()[0].eval();
-                    buf.format_num(num)?;
+                OpCode::PrintDec => {
+                    let num = stack.pop().unwrap();
+                    buf.format_num(unsafe { num.int })?;
                 }
-                _ => unimplemented!(),
+                OpCode::PushParam => {
+                    let idx = pop(&mut ops);
+                    stack.push_unchecked(vars[idx as usize]);
+                }
+                OpCode::PushConst => {
+                    let value: [u8; 2] = std::array::from_fn(|_| pop(&mut ops) as u8);
+                    stack.push_unchecked(Variable {
+                        int: i16::from_ne_bytes(value),
+                    });
+                }
+                OpCode::AddOne => unsafe { stack.mut_slice_last(1).unwrap()[0].int += 1 },
+                OpCode::StrLen => {
+                    let x = &mut unsafe { stack.mut_slice_last(1).unwrap()[0] };
+                    x.int = unsafe { x.str.len() as i16 };
+                }
+                _ => {
+                    #[rustfmt::skip]
+                    switch_and_exec!(
+                        op,
+                        stack,
+                        (
+                            (OpCode::Add, i16::wrapping_add, int, int),
+                            (OpCode::Sub, i16::wrapping_sub, int, int),
+                            (OpCode::Mul, i16::wrapping_mul, int, int),
+                            (OpCode::Div, i16::wrapping_div, int, int),
+                            (OpCode::Mod, i16::wrapping_rem, int, int),
+                            (OpCode::BitAnd, i16::bitand, int, int),
+                            (OpCode::BitOr, i16::bitor, int, int),
+                            (OpCode::BitXor, i16::bitxor, int, int)
+                        )
+                    );
+                }
             }
         }
         Ok(())
     }
-    fn get_param(
-        params: &mut Vec<Var>,
-        id: u8,
-        type_filter: Option<ExprType>,
-    ) -> Result<usize, ParseError> {
-        Ok(match params.iter().position(|elem| elem.id == id) {
-            Some(idx) => {
-                if params[idx].expr_type == type_filter.unwrap_or(ExprType::Unknown)
-                    || params[idx].expr_type == ExprType::Unknown
-                {
-                    idx
-                } else {
-                    return Err(ParseError::WrongType);
-                }
+    fn get_exprs<const C: usize, F>(
+        stack: &mut Stack<ExprType, { Self::OP_STACK_SIZE }>,
+        type_filter: F,
+    ) -> Result<(), ParseError>
+    where
+        F: FnOnce(&[ExprType; C]) -> bool,
+    {
+        if type_filter(unsafe {
+            stack
+                .slice_last(C)
+                .ok_or(ParseError::EmptyStack)
+                .unwrap()
+                .as_array()
+                .unwrap_unchecked()
+        }) {
+            for _ in 0..C {
+                _ = stack.pop();
             }
-            None => {
-                let i = params.len();
-                params.push(Var {
-                    id,
-                    expr_type: type_filter.unwrap_or(ExprType::Unknown),
-                });
-                i
-            }
-        })
-    }
-    // FIXME P! Type BACKpatching
-    fn get_exprs<const C: usize>(
-        stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
-        exprs: &Vec<Expr>,
-        type_filter: ExprType,
-    ) -> Result<[u8; C], ParseError> {
-        if stack.len() >= C {
-            let res = array::from_fn(|_| stack.pop().unwrap());
-            for elem in res.iter() {
-                if !(exprs[*elem as usize].expr_type == ExprType::Unknown
-                    || exprs[*elem as usize].expr_type == type_filter)
-                {
-                    return Err(ParseError::WrongType);
-                }
-            }
-            Ok(res)
+            Ok(())
         } else {
-            return Err(ParseError::EmptyStack);
+            Err(ParseError::WrongType)
         }
     }
-    // FIXME P2
-    fn get_cmp_exprs(
-        _stack: &mut Stack<u8, { Self::OP_STACK_SIZE }>,
-        _exprs: &Vec<Expr>,
-    ) -> Result<[u8; 2], ParseError> {
-        todo!();
-        // if stack.len() >= 2 {
-        //     let res = array::from_fn(|_| stack.pop().unwrap());
-        //     let t = ExprType::Unknown;
-        //     for elem in res.iter() {}
-        //     Ok(res)
-        // } else {
-        //     return Err(ParseError::Debug);
-        // }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Expr {
-    exprs: ExprEnum,
-    expr_type: ExprType,
-}
-
-impl Expr {
-    pub fn eval(&self) {
-        //Rec?
-        match self {
-            _ => (),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ExprEnum {
-    //Num
-    Add((u8, u8)), // +
-    Sub((u8, u8)), // -
-    Mul((u8, u8)), // *
-    Div((u8, u8)), // /
-    Mod((u8, u8)), // m
-    And((u8, u8)), // &
-    Or((u8, u8)),  // |
-    Xor((u8, u8)), // ^
-    //Cond
-    Eq((u8, u8)),          // =
-    LargerThen((u8, u8)),  // >
-    SmallerThen((u8, u8)), // <
-    //Str
-    StrLen(u8), // l
-    //Bool
-    CondOr((u8, u8)),  // O
-    CondAnd((u8, u8)), // A
-    CondNot(u8),       // !
-    //Branching
-    If(u8), // ?
-    /// Index into the Params
-    Ground(u8),
-    /// Limited consts to u32
-    Const(u32),
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
-enum Print {
-    PrintOct(u8),  // Expects a ???? o?
-    PrintHex(u8),  // Expects a i16? x
-    PrintBHex(u8), // Expects a i16? X
-    PrintDec(u8),  // Expects a i16? d
-    PrintStr(u8),  // Expects a *const char? s?
-    PrintChar(u8), // Expects a int
-    Byte(u8),
-    Slice(u8), // Lenght
+#[derive(Clone, Copy, Debug)]
+enum OpCode {
+    //Num
+    Add,    // +
+    AddOne, // i
+    Sub,    // -
+    Mul,    // *
+    Div,    // /
+    Mod,    // m
+    BitAnd, // &
+    BitOr,  // |
+    BitXor, // ^
+    //Cond
+    CondEq,          // =
+    CondLargerThen,  // >
+    CondSmallerThen, // <
+    CondOr,          // O
+    CondAnd,         // A
+    CondNot,         // !
+    //Str
+    StrLen, // l
+
+    // FIXME P3 Add Branching
+
+    // Following 2 Bytes are:
+    // The constant
+    PushConst,
+
+    // Followiing Byte is
+    // The Id
+    PushParam,
+    // The Char
+    PrintByte,
+    // The SliceLen
+    PrintSlice,
+
+    PrintOct,
+    PrintDec,
+    PrintHex,
+    PrintBHex,
+    PrintStr,
+    PrintChar,
 }
 
-/// Param id is (0..9)
-#[derive(Clone, Copy, Debug)]
-struct Var {
-    id: u8,
-    expr_type: ExprType,
+impl OpCode {
+    pub fn push_p(ops: &mut Vec<OpCode>, id: u8) {
+        ops.push(OpCode::PushParam);
+        ops.push(unsafe { std::mem::transmute(id) });
+    }
+    pub fn push_byte(ops: &mut Vec<OpCode>, byte: u8) {
+        ops.push(OpCode::PrintByte);
+        ops.push(unsafe { std::mem::transmute(byte) });
+    }
+    pub fn push_const(ops: &mut Vec<OpCode>, num: i16) {
+        ops.push(OpCode::PushConst);
+        ops.extend(unsafe { std::mem::transmute::<[u8; 2], [OpCode; 2]>(num.to_ne_bytes()) });
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -568,5 +550,4 @@ enum ExprType {
     String,
     Int,
     Bool,
-    Unknown,
 }
