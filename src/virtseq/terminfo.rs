@@ -82,6 +82,12 @@ pub enum ParseError {
     MissingFeatureMatch,
     InvalidConsts,
     MissingFeatureConsts,
+    // IDK
+    EmptyStrIn,
+    EmptyStrOut,
+    EmptyStr,
+    //FIXME
+    UnknownError,
 }
 
 impl Error for ParseError {}

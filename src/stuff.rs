@@ -2,43 +2,25 @@ use core::fmt::NumBufferTrait;
 use std::{fmt::Debug, mem::MaybeUninit, slice};
 
 #[derive(Debug)]
-pub struct NumberBuffer<T: NumBufferTrait>
+pub struct NumberSlice<'a, T: NumBufferTrait>(&'a mut [u8; T::BUF_SIZE])
 where
-    [(); T::BUF_SIZE]:,
-{
-    pub buf: [u8; T::BUF_SIZE],
-}
+    [(); T::BUF_SIZE]:;
 
-impl<T: NumBufferTrait> NumberBuffer<T>
+impl<'a, T: NumBufferTrait> NumberSlice<'a, T>
 where
     [(); T::BUF_SIZE]:,
 {
-    pub fn new() -> NumberBuffer<T> {
-        NumberBuffer {
-            buf: unsafe { MaybeUninit::array_assume_init([MaybeUninit::uninit(); T::BUF_SIZE]) },
+    pub fn new(buf: &'a mut [u8]) -> Option<NumberSlice<'a, T>> {
+        if buf.len() < T::BUF_SIZE {
+            return None;
         }
+        Some(NumberSlice(buf[0..T::BUF_SIZE].as_mut_array().unwrap()))
     }
     pub fn as_slice(&self, len: usize) -> &[u8] {
-        &self.buf[..len]
+        &self.0[..len]
     }
     pub fn as_str(&self, len: usize) -> &str {
-        let slice: &[u8] = &self.buf[..len];
-        let s = unsafe { std::str::from_utf8_unchecked(slice) };
-        s
-    }
-}
-
-impl<F: NumBufferTrait> TryFrom<&mut [u8]> for NumberBuffer<F>
-where
-    [(); F::BUF_SIZE]:,
-{
-    type Error = ();
-    fn try_from(value: &mut [u8]) -> Result<Self, Self::Error> {
-        if value.len() < F::BUF_SIZE {
-            return Err(());
-        }
-        let buf: &mut [u8; F::BUF_SIZE] = value.try_into().expect("Debug Assert Failed");
-        Ok(NumberBuffer { buf: *buf })
+        unsafe { std::str::from_utf8_unchecked(self.as_slice(len)) }
     }
 }
 
@@ -46,14 +28,14 @@ pub trait FastForwardFormat: NumBufferTrait + Sized
 where
     [(); Self::BUF_SIZE]:,
 {
-    fn forward_format(&self, buf: &mut NumberBuffer<Self>) -> usize;
+    fn forward_format(&self, buf: &mut NumberSlice<Self>) -> usize;
 }
 
 macro_rules! fast_forward_format {
     ($($signed:ident, $unsigned:ident,)*) => {
         $(
             impl FastForwardFormat for $signed {
-                fn forward_format(&self, buf: &mut NumberBuffer<Self>)->usize {
+                fn forward_format(&self, buf: &mut NumberSlice<Self>)->usize {
                     const IDK: usize = $signed::BUF_SIZE-2;
 
                     const STEPS: [$unsigned; IDK] = {
@@ -74,7 +56,7 @@ macro_rules! fast_forward_format {
                     let mut i_buf = 0;
 
                     let mut num  = if num < 0 {
-                        buf.buf[i_buf] = b'-';
+                        buf.0[i_buf] = b'-';
                         i_buf+=1;
                         num.unsigned_abs()
                     } else {
@@ -90,17 +72,18 @@ macro_rules! fast_forward_format {
                         let step = STEPS[i];
                         digit = num/step;
                         num %= step;
-                        buf.buf[i_buf] = b'0' + digit as u8;
+                        buf.0[i_buf] = b'0' + digit as u8;
                         i+=1;
                         i_buf+=1;
                     }
-                    buf.buf[i_buf] = b'0' + num as u8;
+
+                    buf.0[i_buf] = b'0' + num as u8;
                     i_buf+1
                 }
             }
 
             impl FastForwardFormat for $unsigned {
-                fn forward_format(&self, buf: &mut NumberBuffer<Self>)->usize {
+                fn forward_format(&self, buf: &mut NumberSlice<Self>)->usize {
 
                     const IDK: usize = $unsigned::BUF_SIZE-1;
 
@@ -121,7 +104,7 @@ macro_rules! fast_forward_format {
                     let mut i = 0;
                     let mut i_buf = 0;
 
-                    while i < IDK && STEPS[i] > num {
+                    while i < IDK && STEPS[i] >= num {
                         i+=1;
                         continue;
                     }
@@ -130,11 +113,11 @@ macro_rules! fast_forward_format {
                         let step = STEPS[i];
                         digit = num/step;
                         num %= step;
-                        buf.buf[i_buf] = b'0' + digit as u8;
+                        buf.0[i_buf] = b'0' + digit as u8;
                         i+=1;
                         i_buf+=1;
                     }
-                    buf.buf[i_buf] = b'0' + num as u8;
+                    buf.0[i_buf] = b'0' + num as u8;
                     i_buf+1
                 }
             }

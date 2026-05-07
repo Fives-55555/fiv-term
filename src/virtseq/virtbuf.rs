@@ -1,10 +1,24 @@
-use crate::stuff::{FastForwardFormat, NumberBuffer};
-use std::io::{Write, stdout};
+use crate::stuff::{FastForwardFormat, NumberSlice};
+use core::fmt::NumBufferTrait;
+use std::{
+    fmt::Debug,
+    io::{Write, stdout},
+};
 
 pub struct VirtSeqBuf {
     pub buf: [u8; Self::BUFFER_SIZE],
     pub idx: usize,
     pub min_flush_size: usize,
+}
+
+impl Debug for VirtSeqBuf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Buf: {{ Len: {}, buf: {:?}, min_fls: {} }}",
+            self.idx, self.buf, self.min_flush_size
+        )
+    }
 }
 
 impl VirtSeqBuf {
@@ -19,13 +33,10 @@ impl VirtSeqBuf {
         }
     }
     pub fn format_num(&mut self, num: i16) -> std::io::Result<()> {
-        let mut buf = match NumberBuffer::try_from(&mut self.buf[self.idx..]) {
-            Ok(buf) => buf,
-            Err(_) => {
-                self.flush()?;
-                NumberBuffer::try_from(&mut self.buf[self.idx..]).expect("The BUFFER is to small.")
-            }
-        };
+        if self.cap_left() < i16::BUF_SIZE {
+            self.flush()?
+        }
+        let mut buf = NumberSlice::new(&mut self.buf[self.idx..]).expect("Your buf is to small");
         let x = num.forward_format(&mut buf);
         self.idx += x;
         Ok(())

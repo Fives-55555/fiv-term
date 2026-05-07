@@ -2,7 +2,6 @@
 #![feature(int_format_into)]
 #![feature(stmt_expr_attributes)]
 #![feature(ptr_mask)]
-#![feature(maybe_uninit_array_assume_init)]
 #![allow(internal_features)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
@@ -16,6 +15,10 @@ pub use stuff::{/*AlignedPop,*/ AlignedPush, SeqBuf, Stack};
 pub mod stdio;
 
 pub mod virtseq;
+
+pub use virtseq::TermInfoConfig;
+
+mod tests;
 
 // pub use crate::stuff::{FastForwardFormat, NumberBuffer};
 

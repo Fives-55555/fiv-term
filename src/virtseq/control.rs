@@ -46,7 +46,7 @@ macro_rules! get_strs {(
                     $buffer.extend(slice);
                     slice.len()
                 }
-                _ => return Err(()),
+                _ => return Err(ParseError::EmptyStr),
             }
         };
     };
@@ -57,7 +57,7 @@ macro_rules! get_strs {(
                 TermInfoString::There(slice) => {
                     ParsedStringCap::<{$io.len()}>::parse_out(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io).unwrap()
                 }
-                _=>return Err(())
+                _=>return Err(ParseError::EmptyStrOut)
             }
         };
     };
@@ -67,14 +67,14 @@ macro_rules! get_strs {(
             TermInfoString::There(slice) => {
                 ParsedStringCap::parse_in(&mut $buffer, slice, io);
             }
-            _=>return Err(())
+            _=>return Err(ParseError::EmptyStrIn)
         }
     };
 }
 
 impl TermInfoConfig<'_> {
     pub const DEFAULT_PRE_ALLOC: usize = 5 * 3;
-    pub fn with_entry(entry: TermInfo) -> Result<TermInfoConfig, ()> {
+    pub fn with_entry(entry: TermInfo) -> Result<TermInfoConfig, ParseError> {
         let mut buf: Vec<u8> = Vec::with_capacity(Self::DEFAULT_PRE_ALLOC);
 
         get_strs!(
@@ -88,12 +88,20 @@ impl TermInfoConfig<'_> {
 
         let mut buf = SeqBuf::new(buf.into_boxed_slice());
 
+        fn dyn_str<const N: usize>(
+            buf: &mut SeqBuf,
+            str: ParsedStringCap<N>,
+        ) -> Result<ParsedStringCap<N>, ParseError> {
+            buf.get_next(str.op_len + str.slice_len)
+                .ok_or(ParseError::UnknownError)?;
+            Ok(str)
+        }
         Ok(TermInfoConfig {
             clear: buf.get_next(clear).unwrap(),
             get_pos_res: buf.get_next(get_pos_res).unwrap(),
             get_pos_req: buf.get_next(get_pos_req).unwrap(),
-            set_pos: set_pos,
-            buf: buf.end().ok_or(())?,
+            set_pos: dyn_str(&mut buf, set_pos).unwrap(),
+            buf: buf.end().ok_or(ParseError::UnknownError)?,
             resp: Vec::with_capacity(4),
         })
     }
@@ -169,14 +177,14 @@ macro_rules! parse_n_check {
             $($filter => {
                 Self::get_exprs::<$argc, _>(&mut $stack, $type_filter)
                 .unwrap();
-                ($code, $ret_type)
+                ($code as u8, $ret_type)
             })*
             _=>{
                 $ops.push(match $char {
                     $(
                         $print_filter=>{
                             Self::get_exprs::<1, _>(&mut $stack, $print_type_filter).unwrap();
-                            $print_code
+                            $print_code as u8
                         }
                     )*
                     _ => return Err(ParseError::InvalidMod),
@@ -221,7 +229,7 @@ impl<const N: usize> ParsedStringCap<N> {
         [(); Self::OP_STACK_SIZE]:,
     {
         let mut stack: Stack<ExprType, { Self::OP_STACK_SIZE }> = Stack::new();
-        let mut ops: Vec<OpCode> = Vec::new();
+        let mut ops: Vec<u8> = Vec::new();
         // FIXME CHeck for right use
         let mut used: u16 = 0;
 
@@ -241,7 +249,7 @@ impl<const N: usize> ParsedStringCap<N> {
             if char == b'%' {
                 state = PState::None;
                 char = *bytes.next().ok_or(ParseError::IncompleteMod).unwrap();
-                let op: (OpCode, ExprType) = match char {
+                let op: (u8, ExprType) = match char {
                     b'?' => return Err(ParseError::MissingFeatureIf),
                     b'%' => {
                         OpCode::push_byte(&mut ops, char);
@@ -260,7 +268,7 @@ impl<const N: usize> ParsedStringCap<N> {
                             stack.push(inputs[idx].1);
                             OpCode::push_p(&mut ops, idx as u8);
                             if one && (id == 1 || id == 2) {
-                                ops.push(OpCode::AddOne);
+                                ops.push(OpCode::AddOne as u8);
                             }
                         } else {
                             return Err(ParseError::InvalidId);
@@ -353,7 +361,7 @@ impl<const N: usize> ParsedStringCap<N> {
                         let prev_char = ops[idx] as u8;
                         ops[idx] = unsafe { std::mem::transmute(2_u8) };
 
-                        ops[idx - 1] = OpCode::PrintSlice;
+                        ops[idx - 1] = OpCode::PrintSlice as u8;
 
                         buf.push(prev_char);
                         buf.push(char);
@@ -371,7 +379,6 @@ impl<const N: usize> ParsedStringCap<N> {
         }
 
         if stack.len() != 0 {
-            println!("{stack:?}");
             return Err(ParseError::NotEmptyStack);
         }
 
@@ -410,11 +417,11 @@ impl<const N: usize> ParsedStringCap<N> {
         let mut data = SeqSlice::new(data);
         _ = data.get_next(self.base);
         let mut slices: &[u8] = data.get_next(self.slice_len).unwrap();
-        let mut ops: &[OpCode] = data.get_next_aligned_t(self.op_len).unwrap();
+        let mut ops: &[u8] = data.get_next(self.op_len).unwrap();
         let mut stack: Stack<Variable, { Self::OP_STACK_SIZE }> = Stack::new();
 
         while !ops.is_empty() {
-            let op = pop(&mut ops);
+            let op = unsafe { std::mem::transmute(pop(&mut ops)) };
             match op {
                 OpCode::PrintByte => buf.write_byte(pop(&mut ops) as u8)?,
                 OpCode::PrintSlice => {
@@ -439,6 +446,10 @@ impl<const N: usize> ParsedStringCap<N> {
                     let x = &mut unsafe { stack.mut_slice_last(1).unwrap()[0] };
                     x.int = unsafe { x.str.len() as i16 };
                 }
+                OpCode::CondNot => {
+                    let cond = &mut unsafe { stack.mut_slice_last(1).unwrap()[0].bool };
+                    *cond = !*cond;
+                }
                 _ => {
                     #[rustfmt::skip]
                     switch_and_exec!(
@@ -455,9 +466,8 @@ impl<const N: usize> ParsedStringCap<N> {
                             (OpCode::BitXor, i16::bitxor, int, int),
                             (OpCode::CondAnd, |a, b| a && b, bool, bool),
                             (OpCode::CondOr, |a, b| a || b, bool, bool),
-                            (OpCode::CondXor, |a, b| a ^ b, bool, bool),
-                            (OpCode::CondLargerThen, i16::gt, int, int),
-                            (OpCode::CondSmallerThen, i16::lt, int, int)
+                            (OpCode::CondLargerThen, |a, b| a > b, int, bool),
+                            (OpCode::CondSmallerThen, |a, b| a < b, int, bool)
                         )
                     );
                 }
@@ -492,6 +502,7 @@ impl<const N: usize> ParsedStringCap<N> {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 enum OpCode {
     //Num
     Add,    // +
@@ -536,17 +547,17 @@ enum OpCode {
 }
 
 impl OpCode {
-    pub fn push_p(ops: &mut Vec<OpCode>, id: u8) {
-        ops.push(OpCode::PushParam);
-        ops.push(unsafe { std::mem::transmute(id) });
+    pub fn push_p(ops: &mut Vec<u8>, id: u8) {
+        ops.push(OpCode::PushParam as u8);
+        ops.push(id);
     }
-    pub fn push_byte(ops: &mut Vec<OpCode>, byte: u8) {
-        ops.push(OpCode::PrintByte);
-        ops.push(unsafe { std::mem::transmute(byte) });
+    pub fn push_byte(ops: &mut Vec<u8>, byte: u8) {
+        ops.push(OpCode::PrintByte as u8);
+        ops.push(byte);
     }
-    pub fn push_const(ops: &mut Vec<OpCode>, num: i16) {
-        ops.push(OpCode::PushConst);
-        ops.extend(unsafe { std::mem::transmute::<[u8; 2], [OpCode; 2]>(num.to_ne_bytes()) });
+    pub fn push_const(ops: &mut Vec<u8>, num: i16) {
+        ops.push(OpCode::PushConst as u8);
+        ops.extend(num.to_ne_bytes());
     }
 }
 
