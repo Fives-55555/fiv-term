@@ -1,4 +1,4 @@
-use crate::{
+ause crate::{
     SeqBuf, Stack, idx_name,
     stuff::{CopyT, SeqSlice},
     virtseq::ParseError,
@@ -338,7 +338,7 @@ impl<const N: usize> ParsedStringCap<N> {
                             (
                                 (b'+', OpCode::Add, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
                                 (b'&', OpCode::BitAnd, ExprType::Int, 2, |arr| arr[0]==ExprType::Int && arr[1] == ExprType::Int),
-                                (b'A', OpCode::CondAnd, ExprType::Bool, 2, |arr| arr[0] == ExprType::Bool && arr[1] == ExprType::Bool),
+                               (b'A', OpCode::CondAnd, ExprType::Bool, 2, |arr| arr[0] == ExprType::Bool && arr[1] == ExprType::Bool),
                                 (b'!', OpCode::CondNot, ExprType::Bool, 1, |arr| arr[0] == ExprType::Bool),
                                 (b'O', OpCode::CondOr, ExprType::Bool, 2, |arr| arr[0] == ExprType::Bool && arr[1] == ExprType::Bool),
                                 (b'/', OpCode::Div, ExprType::Int, 2, |arr| arr[0] == ExprType::Int && arr[1] == ExprType::Int),
