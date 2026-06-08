@@ -1,24 +1,33 @@
-ause crate::{
+use crate::{
     SeqBuf, Stack, idx_name,
     stuff::{CopyT, SeqSlice},
     virtseq::ParseError,
 };
 
-use std::ops::{BitAnd, BitOr, BitXor};
+use std::{
+    borrow::Cow,
+    fmt::Debug,
+    io::{Error, ErrorKind},
+    ops::{BitAnd, BitOr, BitXor},
+};
 
-use super::{TermInfo, TermInfoString, VirtSeqBuf};
+use super::{TermInfoEntry, TermInfoString, VirtSeqBuf};
 
-pub trait TermControl {
-    type Result<T>;
-    fn clear_screen(&self, buf: &mut VirtSeqBuf) -> Self::Result<()>;
+pub trait TermControl: Sized {
+    type TermError: Debug;
+    fn new_controls() -> Result<Self, Self::TermError>;
+    fn clear_screen(&self, buf: &mut VirtSeqBuf) -> Result<(), Self::TermError>;
     /// The Cursor Position will be returned through the StdIn. So you need to process the Input to get the Cursor Postion.
-    fn get_cursor_pos(&mut self, buf: &mut VirtSeqBuf, user_data: u8) -> Self::Result<()>;
-    fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Self::Result<()>;
+    fn get_cursor_pos(
+        &mut self,
+        buf: &mut VirtSeqBuf,
+        user_data: u8,
+    ) -> Result<(), Self::TermError>;
+    fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Result<(), Self::TermError>;
+    fn filter_in(&self, buf: &mut [u8]) -> Option<&mut [u8]>;
 }
 
 struct TermResp {
-    // allows up to 32s timeout but 30s should be max
-    timestamp: u16,
     resp: RespType,
     id: u8,
 }
@@ -29,12 +38,14 @@ pub enum RespType {
     ReqScrSize,
 }
 
-pub struct TermInfoConfig<'me> {
+type SelfRefSlice = Cow<'static, [u8]>;
+
+pub struct TermInfoConfig {
     resp: Vec<TermResp>,
     buf: Box<[u8]>,
-    clear: &'me [u8],
+    clear: SelfRefSlice,
     get_pos_res: ParsedStringCap<2>,
-    get_pos_req: &'me [u8],
+    get_pos_req: SelfRefSlice,
     set_pos: ParsedStringCap<2>,
 }
 
@@ -44,11 +55,11 @@ macro_rules! get_strs {(
         $(
             $id:ident,
             $name:literal
-            $(, $dir:ident, $io:expr)?
+            $(, $io:expr)?
         );+ $(;)?
     ) => {
         $(
-            get_strs!(_ $entry, $buffer, $id, $name $(, $dir, $io)?);
+            get_strs!(_ $entry, $buffer, $id, $name $(, $io)?);
         )+
     };
     (_ $entry:expr, $buffer:expr, $id:ident, $name:literal) => {
@@ -63,42 +74,36 @@ macro_rules! get_strs {(
             }
         };
     };
-    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal, out, $io:expr) => {
+    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal, $io:expr) => {
         let $id = {
             let str = $entry.get_str(idx_name!(STRING, $name));
             match *str.unwrap() {
                 TermInfoString::There(slice) => {
-                    ParsedStringCap::<{$io.len()}>::parse_out(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io).unwrap()
+                    ParsedStringCap::<{$io.len()}>::parse(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io).unwrap()
                 }
                 _=>return Err(ParseError::EmptyStrOut)
             }
         };
     };
-    (_ $entry:expr, $buffer:expr, $id:ident, $name:literal, in, $io:expr) => {
-        let $id = {
-            let str = $entry.get_str(idx_name!(STRING, $name));
-            match *str.unwrap() {
-                TermInfoString::There(slice) => {
-                    ParsedStringCap::<{$io.len()}>::parse_in(&mut $buffer as &mut Vec<u8>, slice as &[u8], $io).unwrap()
-                }
-                _=>return Err(ParseError::EmptyStrIn)
-            }
-        };
-    };
 }
 
-impl TermInfoConfig<'_> {
+impl TermInfoConfig {
     pub const DEFAULT_PRE_ALLOC: usize = 5 * 3;
-    pub fn with_entry(entry: TermInfo) -> Result<TermInfoConfig, ParseError> {
+    /// This function uses the $TERM env var to get the config of the current Terminal
+    pub fn new() -> Result<TermInfoConfig, ParseError> {
+        let entry = TermInfoEntry::from_term()?;
+        TermInfoConfig::from_entry(entry)
+    }
+    pub fn from_entry(entry: TermInfoEntry) -> Result<TermInfoConfig, ParseError> {
         let mut buf: Vec<u8> = Vec::with_capacity(Self::DEFAULT_PRE_ALLOC);
 
         get_strs!(
             entry,
             buf,
             clear, "clear_screen";
-            get_pos_res, "user6", in, [(ExprType::Int), (ExprType::Int|m)];
+            get_pos_res, "user6", [(0u8, ExprType::Int), (1u8, ExprType::Int)];
             get_pos_req, "user7";
-            set_pos, "cursor_address", out, [(0u8, ExprType::Int),(1u8, ExprType::Int)];
+            set_pos, "cursor_address", [(0u8, ExprType::Int),(1u8, ExprType::Int)];
         );
 
         let mut buf = SeqBuf::new(buf.into_boxed_slice());
@@ -112,9 +117,9 @@ impl TermInfoConfig<'_> {
             Ok(str)
         }
         Ok(TermInfoConfig {
-            clear: buf.get_next(clear).unwrap(),
-            get_pos_res: buf.get_next(get_pos_res).unwrap(),
-            get_pos_req: buf.get_next(get_pos_req).unwrap(),
+            clear: Cow::Borrowed(buf.get_next(clear).unwrap()),
+            get_pos_res: dyn_str(&mut buf, get_pos_res).unwrap(),
+            get_pos_req: Cow::Borrowed(buf.get_next(get_pos_req).unwrap()),
             set_pos: dyn_str(&mut buf, set_pos).unwrap(),
             buf: buf.end().ok_or(ParseError::UnknownError)?,
             resp: Vec::with_capacity(4),
@@ -122,18 +127,38 @@ impl TermInfoConfig<'_> {
     }
 }
 
-impl TermControl for TermInfoConfig<'_> {
-    type Result<T> = std::io::Result<T>;
-    fn clear_screen(&self, buf: &mut VirtSeqBuf) -> Self::Result<()> {
-        buf.write(self.clear)
+impl TermControl for TermInfoConfig {
+    type TermError = Error;
+    fn new_controls() -> Result<Self, Self::TermError> {
+        match TermInfoConfig::new() {
+            Ok(controls) => Ok(controls),
+            Err(_) => Err(Error::new(
+                ErrorKind::InvalidData,
+                "ParseError did happen! Ops!",
+            )),
+        }
     }
-    fn get_cursor_pos(&mut self, buf: &mut VirtSeqBuf, user_data: usize) -> Self::Result<()> {
-        self.resp.push((self.get_pos_res, user_data));
-        buf.write(self.get_pos_req)
+    fn clear_screen(&self, buf: &mut VirtSeqBuf) -> Result<(), Self::TermError> {
+        buf.write(self.clear.as_slice())
     }
-    fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Self::Result<()> {
+    fn get_cursor_pos(
+        &mut self,
+        buf: &mut VirtSeqBuf,
+        user_data: u8,
+    ) -> Result<(), Self::TermError> {
+        self.resp.push(TermResp {
+            resp: RespType::ReqCurPos,
+            id: user_data,
+        });
+        buf.write(self.get_pos_req.as_slice())
+    }
+    fn set_cursor_pos(&self, buf: &mut VirtSeqBuf, x: i16, y: i16) -> Result<(), Self::TermError> {
         self.set_pos
             .print(&self.buf, buf, [Param::Int(x), Param::Int(y)])
+    }
+    fn filter_in(&self, _buf: &mut [u8]) -> Option<&mut [u8]> {
+        todo!("INput filtering");
+        None
     }
 }
 
@@ -235,7 +260,7 @@ macro_rules! switch_and_exec {
 // FIXME Feature add OPs for strs
 impl<const N: usize> ParsedStringCap<N> {
     const OP_STACK_SIZE: usize = 16;
-    fn parse_out(
+    fn parse(
         buf: &mut Vec<u8>,
         str: &[u8],
         inputs: [(u8, ExprType); N],

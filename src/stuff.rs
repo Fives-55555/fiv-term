@@ -1,5 +1,5 @@
 use core::fmt::NumBufferTrait;
-use std::{fmt::Debug, mem::MaybeUninit, slice};
+use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit, slice};
 
 #[derive(Debug)]
 pub struct NumberSlice<'a, T: NumBufferTrait>(&'a mut [u8; T::BUF_SIZE])
@@ -21,6 +21,15 @@ where
     }
     pub fn as_str(&self, len: usize) -> &str {
         unsafe { std::str::from_utf8_unchecked(self.as_slice(len)) }
+    }
+}
+
+impl<T: NumBufferTrait> NumberSlice<'_, T>
+where
+    [(); T::BUF_SIZE]:,
+{
+    pub fn new_buf() -> [u8; T::BUF_SIZE] {
+        [0; T::BUF_SIZE]
     }
 }
 
@@ -496,3 +505,39 @@ impl CopyT for Vec<u8> {
         return base;
     }
 }
+
+/// Requires the caller to drop the alloc after this thing.
+#[derive(Debug)]
+pub struct KernelMem<T: Debug + ?Sized, A = Const> {
+    ptr: *mut T,
+    _marker: PhantomData<A>,
+}
+
+impl<T: Debug + ?Sized> KernelMem<T> {
+    pub fn from_const(ptr: *const T) -> KernelMem<T, Const> {
+        KernelMem::<T, Const> {
+            ptr: ptr.cast_mut(),
+            _marker: PhantomData::default(),
+        }
+    }
+    pub fn from_mut(ptr: *mut T) -> KernelMem<T, Mut> {
+        KernelMem::<T, Mut> {
+            ptr: ptr,
+            _marker: PhantomData::default(),
+        }
+    }
+    pub fn get_ref<'a>(&'a self) -> &'a T {
+        unsafe { self.ptr.as_ref().unwrap_unchecked() }
+    }
+}
+
+impl<T: Debug + ?Sized> KernelMem<T, Mut> {
+    pub fn get_ref_mut<'a>(&'a mut self) -> &'a mut T {
+        unsafe { self.ptr.as_mut().unwrap_unchecked() }
+    }
+}
+
+#[derive(Debug)]
+pub struct Const;
+#[derive(Debug)]
+pub struct Mut;

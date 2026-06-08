@@ -1,35 +1,38 @@
-use crate::stuff::{FastForwardFormat, NumberSlice};
-use core::fmt::NumBufferTrait;
-use std::{
-    fmt::Debug,
-    io::{Write, stdout},
+use crate::{
+    stdio::{StdIo, StdIoImpl},
+    stuff::{FastForwardFormat, NumberSlice},
 };
+use core::fmt::NumBufferTrait;
+use std::{fmt::Debug, rc::Rc, sync::nonpoison::Mutex};
 
-pub struct VirtSeqBuf {
-    pub buf: [u8; Self::BUFFER_SIZE],
+#[derive(Debug)]
+pub struct VirtSeqBuf<const B: usize = 128, I: StdIo = StdIoImpl> {
+    pub buf: [u8; B],
     pub idx: usize,
     pub min_flush_size: usize,
+    pub io: Rc<Mutex<I>>,
 }
 
-impl Debug for VirtSeqBuf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Buf: {{ Len: {}, buf: {:?}, min_fls: {} }}",
-            self.idx, self.buf, self.min_flush_size
-        )
+impl<const B: usize> VirtSeqBuf<B> {
+    pub const fn new(io: Rc<StdIoImpl>) -> Self {
+        VirtSeqBuf {
+            buf: [0; B],
+            idx: 0,
+            min_flush_size: Self::MIN_FLUSH_SIZE,
+            io: io,
+        }
     }
 }
 
-impl VirtSeqBuf {
-    pub const BUFFER_SIZE: usize = 128;
+impl<const B: usize, I: StdIo> VirtSeqBuf<B, I> {
     pub const MIN_FLUSH_SIZE: usize = 32;
 
-    pub const fn new() -> Self {
+    pub fn new_io(io: Rc<I>, min_flush_size: usize) -> VirtSeqBuf<B, F> {
         VirtSeqBuf {
-            buf: [0; Self::BUFFER_SIZE],
+            buf: [0; B],
             idx: 0,
-            min_flush_size: Self::MIN_FLUSH_SIZE,
+            min_flush_size: min_flush_size,
+            io: io,
         }
     }
     pub fn format_num(&mut self, num: i16) -> std::io::Result<()> {
@@ -41,10 +44,11 @@ impl VirtSeqBuf {
         self.idx += x;
         Ok(())
     }
+    // FIXME ADD Length based writes
     pub fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
         if buf.len() >= self.min_flush_size {
             self.flush()?;
-            return Self::flush_buf(buf);
+            return self.flush_buf(buf);
         }
 
         let cap = self.cap_left();
@@ -54,7 +58,7 @@ impl VirtSeqBuf {
             return Ok(());
         } else {
             if cap != 0 {
-                self.buf[self.idx..Self::BUFFER_SIZE].copy_from_slice(&buf[0..cap]);
+                self.buf[self.idx..B].copy_from_slice(&buf[0..cap]);
             }
             self.flush()?;
             self.idx = buf.len() - cap;
@@ -62,20 +66,16 @@ impl VirtSeqBuf {
             Ok(())
         }
     }
-    #[inline]
     pub fn flush(&mut self) -> std::io::Result<()> {
-        Self::flush_buf(&self.buf[0..self.idx])?;
+        self.flush_buf(&self.buf[0..self.idx])?;
         self.idx = 0;
         Ok(())
     }
-    // FIXME
-    pub fn flush_buf(buf: &[u8]) -> std::io::Result<()> {
-        stdout().write_all(buf)?;
-        stdout().flush()?;
-        Ok(())
+    pub fn flush_buf(&self, buf: &[u8]) -> std::io::Result<()> {
+        self.io.write_all(buf)
     }
     pub fn write_byte(&mut self, byte: u8) -> std::io::Result<()> {
-        if self.idx == Self::BUFFER_SIZE {
+        if self.idx == B {
             self.flush()?;
         }
         self.buf[self.idx] = byte;
@@ -83,6 +83,6 @@ impl VirtSeqBuf {
         Ok(())
     }
     pub fn cap_left(&self) -> usize {
-        Self::BUFFER_SIZE - self.idx
+        B - self.idx
     }
 }

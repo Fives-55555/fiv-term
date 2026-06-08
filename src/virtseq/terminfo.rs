@@ -17,7 +17,7 @@ const MAXENTRYSIZE: usize = 4096;
 const MAXEXTENTRYSIZE: usize = 32768;
 
 #[derive(Debug)]
-pub struct TermInfo<'file> {
+pub struct TermInfoEntry<'file> {
     file: Box<[u8]>,
     // FIXME Overthink this TM
     /// The last is the verbose and descriptive name.
@@ -92,9 +92,9 @@ pub enum ParseError {
 
 impl Error for ParseError {}
 
-impl TermInfo<'_> {
+impl TermInfoEntry<'_> {
     pub const PATH: &'static str = "/usr/share/terminfo/";
-    pub fn new<'a, 'b, P: AsRef<Path>>(path: P) -> Result<TermInfo<'b>, ParseError> {
+    pub fn new<'a, 'b, P: AsRef<Path>>(path: P) -> Result<TermInfoEntry<'b>, ParseError> {
         // FIXME Use a better Reader
         let mut file = Vec::new();
         _ = OpenOptions::new()
@@ -158,7 +158,7 @@ impl TermInfo<'_> {
         };
 
         match file_ref.end() {
-            Some(file) => Ok(TermInfo {
+            Some(file) => Ok(TermInfoEntry {
                 file,
                 names,
                 bools,
@@ -169,7 +169,7 @@ impl TermInfo<'_> {
             None => Err(ParseError::FileNotEmpty),
         }
     }
-    pub fn from_term<'entry>() -> Result<TermInfo<'entry>, ParseError> {
+    pub fn from_term<'entry>() -> Result<TermInfoEntry<'entry>, ParseError> {
         let mut path = PathBuf::from(Self::PATH);
         let term = match env::var_os("TERM") {
             Some(os_str) => os_str,
@@ -184,7 +184,7 @@ impl TermInfo<'_> {
         };
         path.push(dir);
         path.push(term);
-        TermInfo::new(path)
+        TermInfoEntry::new(path)
     }
     pub fn get_str(&self, idx: usize) -> Option<&TermInfoString> {
         if idx < self.strings.len() {
@@ -663,7 +663,7 @@ type TermInfoInt = i16;
 // FIXME Fix the Alignment Problem
 type TermInfoExtInt = [u8; 4];
 
-impl Display for TermInfo<'_> {
+impl Display for TermInfoEntry<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -796,7 +796,7 @@ fn test() {
             let y = file.unwrap().path();
             let y2 = y.to_str().unwrap();
             let ok = std::panic::catch_unwind(|| {
-                let res = TermInfo::new(y2);
+                let res = TermInfoEntry::new(y2);
                 res.unwrap();
             });
             if ok.is_err() {

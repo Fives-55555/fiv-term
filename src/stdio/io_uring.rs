@@ -1,41 +1,47 @@
 use std::{
     cmp::max,
-    io::{Error, Result},
+    io::{Error, Result, Write},
     ptr, slice,
     sync::atomic::{AtomicU32, Ordering},
 };
 
 use libc::{MAP_FAILED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE, mmap};
 
-use crate::stdio::io_uring_def::{
-    IORING_FEAT_SINGLE_MMAP, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES, IoUringParam,
-    IouCQEntry, IouSQEntry, sys_io_uring_enter, sys_io_uring_setup,
+use crate::{
+    stdio::{
+        StdIo,
+        io_uring_def::{
+            IORING_FEAT_SINGLE_MMAP, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES,
+            IoUringParam, IouCQEntry, IouSQEntry, sys_io_uring_enter, sys_io_uring_setup,
+        },
+    },
+    stuff::{Const, KernelMem, Mut},
 };
 
 #[derive(Debug)]
-pub struct IoUring<'a> {
+pub struct IoUring {
     fd: i32,
     to_submit: u32,
     // Size Mask
-    sring_mask: &'a u32,
-    cring_mask: &'a u32,
+    sring_mask: KernelMem<u32, Const>,
+    cring_mask: KernelMem<u32, Const>,
     // S-Ring
     // modified by User
-    sring_tail: &'a AtomicU32,
+    sring_tail: KernelMem<AtomicU32, Const>,
     //C-Ring
     // Modified by Kernel
-    cring_tail: &'a AtomicU32,
+    cring_tail: KernelMem<AtomicU32, Const>,
     // Modified by User
-    cring_head: &'a AtomicU32,
+    cring_head: KernelMem<AtomicU32, Const>,
     // Index to sqe
-    _sarray: &'a mut [u32],
+    _sarray: KernelMem<[u32], Mut>,
     // The S/C Entries
-    sqe: &'a mut [IouSQEntry],
-    cqe: &'a [IouCQEntry],
+    sqe: KernelMem<[IouSQEntry], Mut>,
+    cqe: KernelMem<[IouCQEntry], Const>,
 }
 
-impl<'a> IoUring<'a> {
-    pub fn new(entries: u32) -> Result<IoUring<'a>> {
+impl IoUring {
+    pub fn new(entries: u32) -> Result<IoUring> {
         let mut params = IoUringParam::null();
 
         let fd = sys_io_uring_setup(entries, &mut params)?;
@@ -123,48 +129,45 @@ impl<'a> IoUring<'a> {
             fd: fd as i32,
             to_submit: 0,
 
-            sring_tail: unsafe {
-                AtomicU32::from_ptr((sq_ptr + params.sq_offs.tail as isize) as *mut u32)
-            },
-            sring_mask: unsafe {
-                ((sq_ptr + params.sq_offs.ring_mask as isize) as *mut u32).as_ref()
-            }
-            .unwrap(),
+            sring_tail: KernelMem::from_const(
+                (sq_ptr + params.sq_offs.tail as isize) as *const AtomicU32,
+            ),
+            sring_mask: KernelMem::from_const(
+                (sq_ptr + params.sq_offs.ring_mask as isize) as *const u32,
+            ),
+            cring_head: KernelMem::from_const(
+                (cq_ptr + params.cq_offs.head as isize) as *const AtomicU32,
+            ),
+            cring_tail: KernelMem::from_const(
+                (cq_ptr + params.cq_offs.tail as isize) as *const AtomicU32,
+            ),
+            cring_mask: KernelMem::from_const(
+                (cq_ptr + params.cq_offs.ring_mask as isize) as *const u32,
+            ),
+            _sarray: KernelMem::from_mut(sarray as *mut [u32]),
 
-            cring_head: unsafe {
-                AtomicU32::from_ptr((cq_ptr + params.cq_offs.head as isize) as *mut u32)
-            },
-            cring_tail: unsafe {
-                AtomicU32::from_ptr((cq_ptr + params.cq_offs.tail as isize) as *mut u32)
-            },
-            cring_mask: unsafe {
-                ((cq_ptr + params.cq_offs.ring_mask as isize) as *mut u32).as_ref()
-            }
-            .unwrap(),
-
-            _sarray: sarray,
-
-            sqe: unsafe {
+            sqe: KernelMem::from_mut(unsafe {
                 slice::from_raw_parts_mut(sqes_ptr as *mut IouSQEntry, params.sq_entries as usize)
-            },
-            cqe: unsafe {
+            }),
+            cqe: KernelMem::from_const(unsafe {
                 slice::from_raw_parts_mut(
                     (cq_ptr + params.cq_offs.cqes as isize) as *mut IouCQEntry,
                     params.cq_entries as usize,
                 )
-            },
+            }),
         })
     }
     pub fn get_cqe(&mut self) -> Option<IouCQEntry> {
         loop {
-            let head = self.cring_head.load(Ordering::Acquire);
-            let tail = self.cring_tail.load(Ordering::Acquire);
+            let head = self.cring_head.get_ref().load(Ordering::Acquire);
+            let tail = self.cring_tail.get_ref().load(Ordering::Acquire);
             if head == tail {
                 return None;
             } else {
-                let cqe = self.cqe[(head & self.cring_mask) as usize].clone();
+                let cqe = self.cqe.get_ref()[(head & self.cring_mask.get_ref()) as usize].clone();
                 if self
                     .cring_head
+                    .get_ref()
                     .compare_exchange_weak(head, head + 1, Ordering::Release, Ordering::Relaxed)
                     .is_ok()
                 {
@@ -176,11 +179,11 @@ impl<'a> IoUring<'a> {
         }
     }
     pub fn add_sqe(&mut self, sqe: IouSQEntry) {
-        let tail = self.sring_tail.load(Ordering::Acquire);
-        let index = tail & self.sring_mask;
-        self.sqe[index as usize] = sqe;
+        let tail = self.sring_tail.get_ref().load(Ordering::Acquire);
+        let index = tail & self.sring_mask.get_ref();
+        self.sqe.get_ref_mut()[index as usize] = sqe;
         self.to_submit += 1;
-        self.sring_tail.store(tail + 1, Ordering::Release);
+        self.sring_tail.get_ref().store(tail + 1, Ordering::Release);
     }
     pub fn submit(&mut self, wait_for: u32, flags: u32) -> Result<u32> {
         let ret = sys_io_uring_enter(self.fd, self.to_submit, wait_for, flags, None)?;
@@ -198,24 +201,14 @@ impl<'a> IoUring<'a> {
     }
 }
 
-pub type IouCQResult = std::result::Result<IouCQEntry, (IouCQEntry, Error)>;
-
-#[test]
-fn mark_test() {
-    let mut buf = [0u8; 16];
-
-    let input = 0;
-
-    let mut io_ring = IoUring::new(16).unwrap();
-
-    let mut read = IouSQEntry::null();
-    read.set_read(0x830, input, &mut buf, 0);
-
-    // wait.flags = IouSQFlags::IOSQE_IO_LINK;
-    io_ring.add_sqe(read);
-    io_ring.submit(1, 1).unwrap();
-    let x = io_ring.get_cqe().unwrap();
-    println!("{:?}", x);
-    println!("{:?}", buf);
-    x.get_result().unwrap();
+impl StdIo for IoUring {
+    fn new_stdio() -> Result<Self> {
+        IoUring::new(32)
+    }
 }
+
+impl Read for IoUring {}
+
+impl Write for IoUring {}
+
+pub type IouCQResult = std::result::Result<IouCQEntry, (IouCQEntry, Error)>;

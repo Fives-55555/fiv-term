@@ -5,8 +5,12 @@
 #![allow(internal_features)]
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
-
-use crate::stdio::StdIo;
+#![feature(str_as_str)]
+#![feature(const_heap)]
+#![feature(box_vec_non_null)]
+#![feature(write_all_vectored)]
+#![feature(nonpoison_mutex)]
+#![feature(sync_nonpoison)]
 
 mod stuff;
 
@@ -19,6 +23,10 @@ pub mod virtseq;
 pub use virtseq::TermInfoConfig;
 
 mod tests;
+
+pub mod pages;
+
+pub use pages::TermView;
 
 // pub use crate::stuff::{FastForwardFormat, NumberBuffer};
 
@@ -178,47 +186,6 @@ pub use crate::loadbar::Loadbar;
 //     }
 // }
 
-pub struct Terminal<T: StdIo> {
-    dynamic_view: bool,
-    input: InputState,
-    stdio: T,
-}
-
-enum InputState {
-    Basic,
-    Keyboard,
-    Text,
-}
-
-/// The Requested Action for the Terminal
-enum TerminalAction {
-    Quit,
-    Back,
-    ChangePage,
-}
-
-impl<T: StdIo> Terminal<T> {
-    pub fn new() -> Terminal<T> {
-        Terminal {
-            dynamic_view: false,
-            input: InputState::Basic,
-            stdio: T::default(),
-        }
-    }
-    /// This dequeues any input and consumes it
-    pub fn update(&self) {
-        let mut buf = [0; 16];
-        loop {
-            let read = self.stdio.read_in(&mut buf).unwrap();
-            if read == 0 {
-                break;
-            }
-        }
-    }
-    pub fn render(&self) {}
-    pub fn render_loop() {}
-}
-
 #[cfg(feature = "ter_test")]
 #[test]
 fn try_vis() {}
@@ -251,3 +218,6 @@ impl _Footer {
 pub trait TerminalTrait {
     type Result<V>;
 }
+
+#[cfg(target_os = "linux")]
+pub type TermConfig = TermInfoConfig;
