@@ -98,7 +98,13 @@ impl TermView<'_> {
         }
     }
     pub fn render(&mut self) {
+        let page = match self.page {
+            Some(page)=>page,
+            None=>panic!("Missingpage to render :-(")
+        };
+        page.size = self.config.get_size(&mut self.seq_buf).unwrap();
         self.seq_buf.flush().unwrap();
+        self.wait_for_resp();
     }
     pub fn render_loop() {}
 }
