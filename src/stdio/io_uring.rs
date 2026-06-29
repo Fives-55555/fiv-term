@@ -1,11 +1,14 @@
 use std::{
     cmp::max,
-    io::{Error, Result, Write},
-    ptr, slice,
+    ffi::c_void,
+    io::{Error, Result},
+    ptr,
+    rc::Rc,
+    slice,
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use libc::{MAP_FAILED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE, mmap};
+use libc::{MAP_FAILED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE, close, mmap, munmap};
 
 use crate::{
     stdio::{
@@ -207,8 +210,49 @@ impl StdIo for IoUring {
     }
 }
 
-impl Read for IoUring {}
-
-impl Write for IoUring {}
+// FIXME ADD Support for Application allocated Memory
+impl Drop for IoUring {
+    fn drop(&mut self) {
+        let r_sqe = unsafe {
+            munmap(
+                self.sqe.get_ref().as_mut_ptr() as *mut c_void,
+                self.sqe.get_ref().len() * size_of::<IouSQEntry>(),
+            )
+        };
+        let r_sq = unsafe {
+            munmap(
+                self._sarray.get_ref().as_mut_ptr() as *mut c_void,
+                self._sarray.get_ref().len() * size_of::<u32>(),
+            )
+        };
+        let r_cq = unsafe {
+            munmap(
+                self.cqe.get_ref().as_mut_ptr() as *mut c_void,
+                self.cqe.get_ref().len() * size_of::<IouCQEntry>(),
+            )
+        };
+        if r_sqe != 0 || r_sq != 0 || r_cq != 0 {
+            Result::<(), Error>::Err(Error::last_os_error())
+                .expect("A MEM_UNMAP was unsuccessful!");
+        }
+        let r_fd = unsafe { close(self.fd) };
+        if r_fd != 0 {
+            Result::<(), Error>::Err(Error::last_os_error())
+                .expect("The closure of the IORing was unsuccessful!");
+        }
+    }
+}
 
 pub type IouCQResult = std::result::Result<IouCQEntry, (IouCQEntry, Error)>;
+
+//FIXME maybe add wrapper
+// FIXME add Chained Requests
+pub trait IoUringOps: Sized {
+    fn get_uring(&self) -> &IoUring;
+    fn from_uring<T>(ring: Rc<IoUring>, args: T) -> Result<Self>;
+    fn read(&self, buf: &mut [u8]) -> Result<()>;
+    fn write(&self, buf: &[u8]) -> Result<()>;
+    fn flush_uring(&self) -> Result<usize> {
+        self.get_uring().submit(0, flags)
+    }
+}

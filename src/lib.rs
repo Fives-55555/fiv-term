@@ -11,6 +11,7 @@
 #![feature(write_all_vectored)]
 #![feature(nonpoison_mutex)]
 #![feature(sync_nonpoison)]
+#![feature(exact_size_is_empty)]
 
 mod stuff;
 

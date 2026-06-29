@@ -5,7 +5,6 @@ use crate::{
 };
 
 use std::{
-    borrow::Cow,
     fmt::Debug,
     io::{Error, ErrorKind},
     ops::{BitAnd, BitOr, BitXor},
@@ -38,7 +37,7 @@ pub enum RespType {
     ReqScrSize,
 }
 
-type SelfRefSlice = Cow<'static, [u8]>;
+type SelfRefSlice = &'static [u8];
 
 pub struct TermInfoConfig {
     resp: Vec<TermResp>,
@@ -117,9 +116,9 @@ impl TermInfoConfig {
             Ok(str)
         }
         Ok(TermInfoConfig {
-            clear: Cow::Borrowed(buf.get_next(clear).unwrap()),
+            clear: buf.get_next(clear).unwrap(),
             get_pos_res: dyn_str(&mut buf, get_pos_res).unwrap(),
-            get_pos_req: Cow::Borrowed(buf.get_next(get_pos_req).unwrap()),
+            get_pos_req: buf.get_next(get_pos_req).unwrap(),
             set_pos: dyn_str(&mut buf, set_pos).unwrap(),
             buf: buf.end().ok_or(ParseError::UnknownError)?,
             resp: Vec::with_capacity(4),

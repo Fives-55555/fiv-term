@@ -1,7 +1,8 @@
 use std::sync::LazyLock;
 
 pub struct TermPage {
-    content: Vec<PageWidget>,
+    pub content: Vec<PageWidget>,
+    pub page_size: SizeConfig,
 }
 
 impl TermPage {
@@ -16,12 +17,26 @@ impl TermPage {
     }
     pub fn add_widget(&mut self, widget: PageWidget) {
         self.content.push(widget);
+        self.resize();
+    }
+    pub fn resize(&mut self) {
+        let size = self.page_size;
+        let mut widgets = self.content.iter();
+
+        let wid = match widgets.next() {
+            Some(wid) => wid,
+            None => return,
+        };
+
+        while !widgets.is_empty() {}
+        // How to SIZE Stuff
+        // FIXME
     }
 }
 
 pub struct PageWidget {
     widget_type: WidgetType,
-    size_config: WidgetSize,
+    size_config: SizeConfig,
     // Top-left Corner
     corner: (u16, u16),
     size: (u16, u16),
@@ -34,7 +49,7 @@ impl PageWidget {
     pub const fn from_static_str(str: &'static str) -> PageWidget {
         PageWidget {
             widget_type: WidgetType::StaticTextbox(str),
-            size_config: WidgetSize::default(),
+            size_config: SizeConfig::default(),
             corner: (0, 0),
             size: (0, 0),
         }
@@ -42,7 +57,7 @@ impl PageWidget {
     pub fn from_final_string(string: String) -> PageWidget {
         PageWidget {
             widget_type: WidgetType::RuntimeTextbox(string.into_boxed_str()),
-            size_config: WidgetSize::default(),
+            size_config: SizeConfig::default(),
             corner: (0, 0),
             size: (0, 0),
         }
@@ -50,7 +65,7 @@ impl PageWidget {
     pub fn from_string(string: String) -> PageWidget {
         PageWidget {
             widget_type: WidgetType::MutableTextbox(string),
-            size_config: WidgetSize::default(),
+            size_config: SizeConfig::default(),
             corner: (0, 0),
             size: (0, 0),
         }
@@ -59,44 +74,56 @@ impl PageWidget {
         assert!(string.len() == prefix as usize + suffix as usize);
         PageWidget {
             widget_type: WidgetType::TextField(String::new()),
-            size_config: WidgetSize::from_text_field(prefix, max_size, suffix),
+            size_config: SizeConfig::from_text_field(prefix, max_size, suffix),
             corner: (0, 0),
             size: (0, 0),
         }
     }
 }
 
-/// The Type is in the bigest most right byte(LE)
-pub struct WidgetSize(u32);
+/// The Struct consists out of the width and height size config
+/// |  SizeConfig   |
+/// | width | height|
+/// |  u32  |  u32  |
+///
+/// |             Structure (u32)              |
+/// |------------------------------------------|
+/// | Type | minSize |        TypeData         |
+/// |  u2  |   u14   |           u16           |
+/// |------------------------------------------|
+/// |                |           Pad           |
+/// |           Flex |           u16           |
+/// |------------------------------------------|
+/// |                | numerator | denominator |
+/// |          Ratio |    u8     |     u8      |
+/// |------------------------------------------|
+/// |                |       Fixed Size        |
+/// |          Fixed |           u16           |
+///
+#[repr(align(8))]
+pub struct SizeConfig([u32; 2]);
 
-impl WidgetSize {
-    pub const U12MAX: u16 = 0b111111111111;
+impl SizeConfig {
+    pub const U14_MAX: u16 = 0b11111111111111;
 
-    pub const fn default() -> WidgetSize {
-        WidgetSize::flex()
+    pub const fn default() -> SizeConfig {
+        SizeConfig([SizeConfig::flex(), SizeConfig::flex()])
     }
     pub fn get_type(&self) -> SizeType {
         unsafe { std::mem::transmute(self.0.to_le_bytes()[3]) }
     }
-    pub const fn flex() -> WidgetSize {
-        WidgetSize(0)
+    pub const fn flex(min_size: u16) -> u32 {
+        debug_assert!(min_size <= Self::U14_MAX);
+        let min = (min_size & Self::U14_MAX) as u32;
+        ((SizeType::Flex as u32) << 14 | min) << 16
     }
-    // FIXME mybe u4 u16 u4 ?
-    pub fn from_text_field(prefix: u8, max_size: u8, suffix: u8) -> WidgetSize {
-        WidgetSize(u32::from_le_bytes([
-            SizeType::TextField as u8,
-            prefix,
-            max_size,
-            suffix,
-        ]))
-    }
-    pub fn from_ratio(x: u16, y: u16) -> WidgetSize {
+    pub fn from_ratio(x: u16, y: u16) -> SizeConfig {
         assert!(x <= Self::U12MAX && y <= Self::U12MAX);
-        WidgetSize((SizeType::Ratio as u32) << 24 | (x as u32) << 12 | y as u32)
+        SizeConfig((SizeType::Ratio as u32) << 24 | (x as u32) << 12 | y as u32)
     }
-    pub fn from_fixed(x: u16, y: u16) -> WidgetSize {
+    pub fn from_fixed(x: u16, y: u16) -> SizeConfig {
         assert!(x <= Self::U12MAX && y <= Self::U12MAX);
-        WidgetSize((SizeType::Fixed as u32) << 24 | (x as u32) << 12 | y as u32)
+        SizeConfig((SizeType::Fixed as u32) << 24 | (x as u32) << 12 | y as u32)
     }
     pub fn get_ratio(&self) -> (u8, u8) {
         let bytes = self.0.to_le_bytes();
@@ -111,10 +138,8 @@ impl WidgetSize {
 #[repr(u8)]
 pub enum SizeType {
     Flex = 0,
-    // Width to Height
-    Ratio,
-    Fixed,
-    TextField,
+    Ratio = 1,
+    Fixed = 2,
 }
 
 pub enum WidgetType {

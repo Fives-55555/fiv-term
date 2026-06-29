@@ -1,8 +1,8 @@
-use std::{rc::Rc, sync::nonpoison::Mutex};
+use std::{io::Read, rc::Rc, sync::nonpoison::Mutex};
 
 use crate::{
     TermConfig,
-    stdio::{IoUring, StdIo},
+    stdio::{StdIo, StdIoImpl},
     virtseq::{TermControl, VirtSeqBuf},
 };
 
@@ -10,7 +10,7 @@ mod pages;
 
 pub use pages::{PageWidget, TermPage};
 
-pub struct TermView<'a, T: TermControl = TermConfig, I: StdIo = IoUring> {
+pub struct TermView<'a, T: TermControl = TermConfig, I: StdIo = StdIoImpl> {
     config: T,
     terminal: TerminalState,
     io: Rc<Mutex<I>>,
@@ -53,10 +53,11 @@ impl TermView<'_> {
     pub const BUFFER_SIZE: usize = 4096;
     pub const BUFFER_COUNT: usize = 4;
     pub fn new<T: TermControl, I: StdIo>() -> TermView<'static, T, I> {
-        let io = Rc::new(I::new_stdio().unwrap());
+        let io = Rc::new(Mutex::new(I::new_stdio().unwrap()));
         TermView {
             config: T::new_controls().unwrap(),
             terminal: TerminalState::default(),
+            // FIXME
             seq_buf: std::array::from_fn(|_| VirtSeqBuf::new_io(io.clone(), 64)),
             io: io,
             page: None,
@@ -66,7 +67,7 @@ impl TermView<'_> {
     pub fn update(&self) {
         let mut buf = [0; 16];
         loop {
-            let read = self.io.read_in(&mut buf).unwrap();
+            let read = self.io.lock().read(&mut buf).unwrap();
             if read == 0 {
                 break;
             }
@@ -99,10 +100,14 @@ impl TermView<'_> {
     }
     pub fn render(&mut self) {
         let page = match self.page {
-            Some(page)=>page,
-            None=>panic!("Missingpage to render :-(")
+            Some(page) => page,
+            None => panic!("Missing page to render :-("),
         };
-        page.size = self.config.get_size(&mut self.seq_buf).unwrap();
+        let size = self.config.get_size(&mut self.seq_buf).unwrap();
+        if page.page_size != size {
+            page.page_size = size;
+            page.resize();
+        }
         self.seq_buf.flush().unwrap();
         self.wait_for_resp();
     }

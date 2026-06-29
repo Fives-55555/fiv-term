@@ -16,7 +16,7 @@ pub const IORING_OFF_SQES: off_t = 0x10000000;
 pub const IORING_FEAT_SINGLE_MMAP: u32 = 1 << 0;
 
 bitfield!(
-    IouSQFlags,
+    IoUringSQFlags,
     u8,
     (
         IOSQE_FIXED_FILE,
@@ -435,3 +435,48 @@ pub fn sys_io_uring_register(fd: u32, opcode: u32, arg: *mut c_void, nr_arg: u32
         Ok(ret as u32)
     }
 }
+
+bitfield!(
+    IoUringEnterFlags,
+    u32,
+    (
+        IORING_ENTER_GETEVENTS,
+        { 0 },
+        ("The request will be waiting for min_complete CQs to be finished.")
+    ),
+    (
+        IORING_ENTER_SQ_WAKEUP,
+        { 1 },
+        ("Wake the SQ-Kernelthread setup by IORING_SETUP_SQPOLL.")
+    ),
+    (
+        IORING_ENTER_SQ_WAIT,
+        { 2 },
+        ("This lets the syscall wait for a free SQEntry to return.")
+    ),
+    (
+        IORING_ENTER_EXT_ARG,
+        { 3 },
+        ("Allows arg to be a pointer to io_uring_getevents_arg by setting argsz to the size of the struct.")
+    ),
+    (
+        IORING_ENTER_REGISTERED_RING,
+        { 4 },
+        ("This sets ring_fd to be a offset to the registered ring. Requires registration through IORING_REGISTER_RING_FDS.")
+    ),
+    (
+        IORING_ENTER_ABS_TIMER,
+        { 5 },
+        ("This sets the timeout of the io_uring_getevents_arg to be an absolute timestamp and not a timeout.")
+    ),
+    (
+        IORING_ENTER_EXT_ARG_REG,
+        { 6 },
+        ("The arg must be an offset to a io_uring_getevents_arg struct in a memory region from io_uring_register(2) IORING_REGISTER_MEM_REGION.")
+    ),
+    (
+        IORING_ENTER_NO_IOWAIT,
+        { 7 },
+        ("Requires IORING_FEAT_NO_IOWAIT and ")
+    )
+);

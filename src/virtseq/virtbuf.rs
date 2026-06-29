@@ -10,11 +10,12 @@ pub struct VirtSeqBuf<const B: usize = 128, I: StdIo = StdIoImpl> {
     pub buf: [u8; B],
     pub idx: usize,
     pub min_flush_size: usize,
+    // FIXME
     pub io: Rc<Mutex<I>>,
 }
 
 impl<const B: usize> VirtSeqBuf<B> {
-    pub const fn new(io: Rc<StdIoImpl>) -> Self {
+    pub const fn new(io: Rc<Mutex<StdIoImpl>>) -> Self {
         VirtSeqBuf {
             buf: [0; B],
             idx: 0,
@@ -27,7 +28,7 @@ impl<const B: usize> VirtSeqBuf<B> {
 impl<const B: usize, I: StdIo> VirtSeqBuf<B, I> {
     pub const MIN_FLUSH_SIZE: usize = 32;
 
-    pub fn new_io(io: Rc<I>, min_flush_size: usize) -> VirtSeqBuf<B, F> {
+    pub fn new_io(io: Rc<Mutex<I>>, min_flush_size: usize) -> VirtSeqBuf<B, I> {
         VirtSeqBuf {
             buf: [0; B],
             idx: 0,
@@ -72,7 +73,7 @@ impl<const B: usize, I: StdIo> VirtSeqBuf<B, I> {
         Ok(())
     }
     pub fn flush_buf(&self, buf: &[u8]) -> std::io::Result<()> {
-        self.io.write_all(buf)
+        (*self.io.lock()).write_all(buf)
     }
     pub fn write_byte(&mut self, byte: u8) -> std::io::Result<()> {
         if self.idx == B {

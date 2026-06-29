@@ -506,6 +506,7 @@ impl CopyT for Vec<u8> {
     }
 }
 
+//FIXME Restrict A further
 /// Requires the caller to drop the alloc after this thing.
 #[derive(Debug)]
 pub struct KernelMem<T: Debug + ?Sized, A = Const> {
@@ -526,6 +527,9 @@ impl<T: Debug + ?Sized> KernelMem<T> {
             _marker: PhantomData::default(),
         }
     }
+}
+
+impl<T: Debug + ?Sized, A> KernelMem<T, A> {
     pub fn get_ref<'a>(&'a self) -> &'a T {
         unsafe { self.ptr.as_ref().unwrap_unchecked() }
     }
